@@ -1,0 +1,33 @@
+services:
+  convex-demo:
+    build:
+      context: ..
+      dockerfile: apps/convex-demo/Dockerfile
+    environment:
+      VITE_CONVEX_URL: ${VITE_CONVEX_URL}
+    ports:
+      - "4173:4173"
+
+  issue-harness:
+    build:
+      context: ..
+      dockerfile: services/issue-harness/Dockerfile
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_OWNER: ${GITHUB_OWNER}
+      GITHUB_REPO: ${GITHUB_REPO}
+      GITHUB_BASE_BRANCH: ${GITHUB_BASE_BRANCH:-main}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
+      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      CODEX_MODEL: ${CODEX_MODEL:-gpt-5.4}
+      CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-high}
+      SANDCASTLE_IMAGE: ${SANDCASTLE_IMAGE:-sandcastle-harness:latest}
+      HARNESS_DATA_DIR: /data
+    volumes:
+      - harness-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+volumes:
+  harness-data:

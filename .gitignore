@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store
+.sandcastle/logs/
+.sandcastle/worktrees/
+.harness/state/
+.convex/
