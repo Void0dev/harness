@@ -26,13 +26,37 @@ async function tick() {
 async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>) {
   const existing = state.get(issue.number);
   const branch = existing?.branch ?? branchName(issue.number, issue.title);
+  const wasAlreadyRunning = existing?.status === "running";
 
   await tracker.moveStatus(issue.number, "running");
-  await tracker.comment(issue.number, `Codex picked this up on branch \`${branch}\`.`);
+  if (!wasAlreadyRunning) {
+    await tracker.comment(issue.number, `Codex picked this up on branch \`${branch}\`.`);
+  }
 
   await fs.mkdir(config.dataDir, { recursive: true });
   const comments = await tracker.recentComments(issue.number);
-  const result = await runAgent(issue, branch, comments);
+  await state.set({
+    issueNumber: issue.number,
+    branch,
+    status: "running",
+  });
+
+  let result;
+  try {
+    result = await runAgent(issue, branch, comments);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await state.set({
+      issueNumber: issue.number,
+      branch,
+      status: "failed",
+    });
+    await tracker.needsHuman(
+      issue.number,
+      `Codex run failed before finishing.\n\n\`\`\`text\n${message}\n\`\`\`\n\nFix the runner/sandbox problem, remove \`ai:needs-human\`, and the harness will retry.`,
+    );
+    return;
+  }
   const question = extractHumanQuestion(result.stdout);
 
   if (question) {
@@ -69,6 +93,7 @@ async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker[
 
 async function main() {
   await state.load();
+  await tracker.assertRepositoryAccess();
   await tracker.ensureLabels();
   console.log(`Issue harness started for ${config.owner}/${config.repo}`);
 

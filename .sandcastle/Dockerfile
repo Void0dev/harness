@@ -6,8 +6,11 @@ RUN apt-get update \
 
 RUN npm install -g @openai/codex@0.130.0
 
-RUN useradd -m -u 1000 agent
+RUN useradd -m -u 10001 agent
 USER agent
 WORKDIR /repo
 
 ENV HOME=/home/agent
+ENV GIT_CONFIG_GLOBAL=/tmp/agent.gitconfig
+
+CMD ["sleep", "infinity"]

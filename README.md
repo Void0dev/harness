@@ -46,4 +46,6 @@ Use `coolify/docker-compose.yml`. The harness service needs:
 - Docker socket access for Sandcastle's Docker sandbox provider.
 - A persistent volume mounted at `/data` to keep `.sandcastle`, `.codex`, logs, and issue run state.
 
+For subscription-based Codex usage, set `CODEX_AUTH_MODE=subscription` and run `codex login --device-auth` once against the persistent Codex home mounted at `.harness/codex` locally or `/data/codex` in Coolify. For API billing usage, set `CODEX_AUTH_MODE=api-key` and provide `OPENAI_API_KEY`.
+
 The Convex frontend can be deployed as a static/Vite service. The Convex backend itself still needs `npx convex deploy` against a Convex project.

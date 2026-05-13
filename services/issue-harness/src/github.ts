@@ -7,6 +7,26 @@ export type TrackerIssue = Awaited<ReturnType<GithubTracker["nextIssue"]>>;
 export class GithubTracker {
   private readonly octokit = new Octokit({ auth: config.githubToken });
 
+  async assertRepositoryAccess() {
+    try {
+      await this.octokit.rest.repos.get({
+        owner: config.owner,
+        repo: config.repo,
+      });
+    } catch (error) {
+      if ((error as { status?: number }).status === 404) {
+        throw new Error(
+          [
+            `GitHub repository ${config.owner}/${config.repo} was not found or the token cannot access it.`,
+            "Check GITHUB_OWNER/GITHUB_REPO spelling, make sure the repository exists, and ensure the PAT is scoped to this repository.",
+            "For a fine-grained PAT, grant Metadata read, Contents read/write, Issues read/write, and Pull requests read/write.",
+          ].join(" "),
+        );
+      }
+      throw error;
+    }
+  }
+
   async ensureLabels() {
     for (const [name, color] of Object.entries(labelColors)) {
       try {
@@ -45,6 +65,13 @@ export class GithubTracker {
       per_page: 20,
     });
     return comments
+      .filter((comment) => {
+        const body = comment.body ?? "";
+        return (
+          !body.startsWith("Codex picked this up on branch") &&
+          !body.startsWith("Human attention needed:\n\nCodex run failed before finishing.")
+        );
+      })
       .slice(-10)
       .map((comment) => `@${comment.user?.login ?? "unknown"}: ${comment.body ?? ""}`)
       .join("\n\n---\n\n");

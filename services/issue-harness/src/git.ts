@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { config } from "./env.js";
 
 const execFileAsync = promisify(execFile);
 
 export async function pushBranch(branch: string) {
-  await execFileAsync("git", ["push", "-u", "origin", branch], {
+  const remoteUrl = `https://x-access-token:${encodeURIComponent(config.githubToken)}@github.com/${config.owner}/${config.repo}.git`;
+  await execFileAsync("git", ["push", "-u", remoteUrl, branch], {
     cwd: process.cwd(),
     maxBuffer: 1024 * 1024 * 10,
   });
