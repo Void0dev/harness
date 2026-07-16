@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "slug": "example-service",
+    "github": "owner/repository",
+    "stack": "nest-postgres",
+    "serviceRoot": "."
+  },
+  "branches": {
+    "stage": "stage",
+    "production": "main",
+    "agentPrBase": "stage"
+  },
+  "commands": {
+    "install": "npm ci",
+    "test": "npm test",
+    "typecheck": "npm run typecheck",
+    "build": "npm run build",
+    "smoke": "npm run smoke",
+    "migrateCheck": "npm run migration:check",
+    "migrateStage": "npm run migration:stage",
+    "migrateProduction": "npm run migration:production"
+  },
+  "runtime": {
+    "port": 3000,
+    "healthPath": "/health"
+  },
+  "deployment": {
+    "sourceVisibility": "private",
+    "buildPack": "dockerfile",
+    "dockerfile": "Dockerfile",
+    "gateRunners": { "stage": "ubuntu-latest", "production": "ubuntu-latest" },
+    "requiredEnvironmentVariables": ["DATABASE_URL"],
+    "distinctEnvironmentVariables": ["DATABASE_URL"]
+  },
+  "coolify": {
+    "projectUuid": null,
+    "serverUuid": null,
+    "githubAppUuid": null,
+    "stage": { "environment": "stage", "applicationUuid": null, "domain": null, "dataBackendProvider": null, "dataBackendRef": null, "environmentVariableRefs": { "DATABASE_URL": "STAGE_DATABASE_URL" } },
+    "production": { "environment": "production", "applicationUuid": null, "domain": null, "dataBackendProvider": null, "dataBackendRef": null, "environmentVariableRefs": { "DATABASE_URL": "PRODUCTION_DATABASE_URL" } }
+  },
+  "issueAgent": {
+    "applicationUuid": null,
+    "baseBranch": "stage",
+    "harnessImage": null,
+    "sandboxImage": null,
+    "serverUuid": null,
+    "dataDir": null,
+    "dedicatedAutomationHost": true,
+    "maxConcurrentRuns": 1,
+    "replicas": 1
+  },
+  "observability": {
+    "provider": null,
+    "service": null,
+    "environment": "production"
+  },
+  "productionAgent": {
+    "mode": "diagnose-only",
+    "allowedTools": ["health.read", "logs.query", "traces.query", "metrics.query", "deploy.status"],
+    "mutationPath": "none"
+  }
+}

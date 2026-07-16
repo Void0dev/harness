@@ -1,0 +1,39 @@
+name: Production incident diagnosis
+description: Request bounded, read-only production evidence from the diagnostic agent
+title: "[production] "
+labels: ["production:diagnose"]
+body:
+  - type: input
+    id: service
+    attributes:
+      label: Service
+    validations:
+      required: true
+  - type: textarea
+    id: symptom
+    attributes:
+      label: Symptom
+      description: Describe observed behavior without pasting credentials or raw sensitive payloads.
+    validations:
+      required: true
+  - type: input
+    id: window
+    attributes:
+      label: Time window and timezone
+      placeholder: "2026-07-15 18:00–18:30 UTC"
+    validations:
+      required: true
+  - type: textarea
+    id: correlation
+    attributes:
+      label: Correlation identifiers
+      description: Request, trace, deployment, or run IDs; do not include secrets.
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Requested outcome
+      options:
+        - Diagnosis only
+        - Typed runbook proposal (no execution)
+    validations:
+      required: true

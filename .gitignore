@@ -8,3 +8,5 @@ dist/
 .sandcastle/worktrees/
 .harness/state/
 .convex/
+__pycache__/
+*.py[cod]

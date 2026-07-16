@@ -4,12 +4,18 @@ import path from "node:path";
 export type IssueRunState = {
   issueNumber: number;
   branch: string;
-  status: "running" | "awaiting_human" | "finished" | "failed";
+  status: "running" | "awaiting_human" | "publish_pending" | "finished" | "failed";
   lastSessionId?: string;
   lastLogPath?: string;
   prUrl?: string;
   updatedAt: string;
 };
+
+export function nextRunAction(state?: IssueRunState) {
+  if (state?.status === "finished" && state.prUrl) return "finalize" as const;
+  if (state?.status === "publish_pending" || state?.status === "finished") return "publish" as const;
+  return "run" as const;
+}
 
 export class StateStore {
   private readonly filePath: string;
@@ -44,6 +50,8 @@ export class StateStore {
 
   private async flush() {
     const payload = JSON.stringify([...this.states.values()], null, 2);
-    await fs.writeFile(this.filePath, `${payload}\n`);
+    const temporary = `${this.filePath}.tmp`;
+    await fs.writeFile(temporary, `${payload}\n`, { mode: 0o600 });
+    await fs.rename(temporary, this.filePath);
   }
 }

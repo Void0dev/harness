@@ -1,37 +1,27 @@
 services:
-  convex-demo:
-    build:
-      context: ..
-      dockerfile: apps/convex-demo/Dockerfile
-    environment:
-      VITE_CONVEX_URL: ${VITE_CONVEX_URL}
-    ports:
-      - "4173:4173"
-
   issue-harness:
-    build:
-      context: ..
-      dockerfile: services/issue-harness/Dockerfile
+    image: ${HARNESS_IMAGE:?set an immutable harness image digest}
     environment:
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_OWNER: ${GITHUB_OWNER}
       GITHUB_REPO: ${GITHUB_REPO}
-      GITHUB_BASE_BRANCH: ${GITHUB_BASE_BRANCH:-stage}
+      GITHUB_BASE_BRANCH: stage
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
+      MAX_CONCURRENT_RUNS: 1
       HEALTH_PORT: 3000
-      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-1}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      CODEX_AUTH_MODE: ${CODEX_AUTH_MODE:-api-key}
+      CODEX_AUTH_MODE: ${CODEX_AUTH_MODE:?set api-key or subscription}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CODEX_MODEL: ${CODEX_MODEL:-gpt-5.4}
       CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-high}
-      SANDCASTLE_IMAGE: ${SANDCASTLE_IMAGE:-sandcastle-harness:0.1.0}
-      SANDCASTLE_BUILD_LOCAL: ${SANDCASTLE_BUILD_LOCAL:-true}
+      SANDCASTLE_IMAGE: ${SANDCASTLE_IMAGE:?set an immutable sandbox image}
+      REQUIRE_PINNED_IMAGES: "true"
+      SANDCASTLE_BUILD_LOCAL: "false"
       SANDBOX_REGISTRY_SERVER: ${SANDBOX_REGISTRY_SERVER:-}
       SANDBOX_REGISTRY_USERNAME: ${SANDBOX_REGISTRY_USERNAME:-}
       SANDBOX_REGISTRY_TOKEN: ${SANDBOX_REGISTRY_TOKEN:-}
-      HARNESS_DATA_DIR: ${HARNESS_DATA_DIR:-/opt/issue-harness/void0dev-harness}
+      HARNESS_DATA_DIR: ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}
     volumes:
-      - ${HARNESS_DATA_DIR:-/opt/issue-harness/void0dev-harness}:${HARNESS_DATA_DIR:-/opt/issue-harness/void0dev-harness}
+      - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}:${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}
       - /var/run/docker.sock:/var/run/docker.sock
     expose:
       - "3000"

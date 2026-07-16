@@ -1,0 +1,99 @@
+name: Coolify deploy
+
+on:
+  push:
+    branches: [stage]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coolify-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  deploy-stage:
+    if: github.ref_name == 'stage'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: stage
+    steps:
+      - name: Deploy immutable revision to staging
+        env:
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --get \
+            --url "${COOLIFY_URL%/}/api/v1/deploy" \
+            --data-urlencode "uuid=${RESOURCE_UUID}" \
+            --header "Authorization: Bearer ${COOLIFY_TOKEN}" >/tmp/deploy.json
+          deployment_uuid="$(jq -er '.deployments[0].deployment_uuid' /tmp/deploy.json)"
+          for attempt in $(seq 1 90); do
+            curl --fail-with-body --silent --show-error \
+              --url "${COOLIFY_URL%/}/api/v1/deployments/${deployment_uuid}" \
+              --header "Authorization: Bearer ${COOLIFY_TOKEN}" >/tmp/deployment.json
+            status="$(jq -r '.status // "unknown"' /tmp/deployment.json | tr '[:upper:]' '[:lower:]')"
+            case "$status" in
+              finished|success|completed)
+                deployed_commit="$(jq -er '.commit' /tmp/deployment.json)"
+                [[ "$deployed_commit" =~ ^[0-9a-fA-F]{7,64}$ ]] || { echo "Coolify returned an invalid deployment commit"; exit 1; }
+                [[ "$GITHUB_SHA" == "$deployed_commit"* ]] || { echo "Coolify deployed $deployed_commit, expected $GITHUB_SHA"; exit 1; }
+                exit 0
+                ;;
+              failed|error|cancelled) jq '{status, deployment_uuid, commit}' /tmp/deployment.json; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "Timed out waiting for Coolify deployment ${deployment_uuid}"
+          exit 1
+      - name: Smoke staging
+        env:
+          HEALTH_URL: ${{ vars.COOLIFY_HEALTH_URL }}
+        run: curl --fail-with-body --retry 12 --retry-delay 10 --retry-all-errors "$HEALTH_URL"
+
+  deploy-production:
+    if: github.event_name == 'workflow_dispatch' && github.ref_name == 'main'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy immutable revision to production
+        env:
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --get \
+            --url "${COOLIFY_URL%/}/api/v1/deploy" \
+            --data-urlencode "uuid=${RESOURCE_UUID}" \
+            --header "Authorization: Bearer ${COOLIFY_TOKEN}" >/tmp/deploy.json
+          deployment_uuid="$(jq -er '.deployments[0].deployment_uuid' /tmp/deploy.json)"
+          for attempt in $(seq 1 90); do
+            curl --fail-with-body --silent --show-error \
+              --url "${COOLIFY_URL%/}/api/v1/deployments/${deployment_uuid}" \
+              --header "Authorization: Bearer ${COOLIFY_TOKEN}" >/tmp/deployment.json
+            status="$(jq -r '.status // "unknown"' /tmp/deployment.json | tr '[:upper:]' '[:lower:]')"
+            case "$status" in
+              finished|success|completed)
+                deployed_commit="$(jq -er '.commit' /tmp/deployment.json)"
+                [[ "$deployed_commit" =~ ^[0-9a-fA-F]{7,64}$ ]] || { echo "Coolify returned an invalid deployment commit"; exit 1; }
+                [[ "$GITHUB_SHA" == "$deployed_commit"* ]] || { echo "Coolify deployed $deployed_commit, expected $GITHUB_SHA"; exit 1; }
+                exit 0
+                ;;
+              failed|error|cancelled) jq '{status, deployment_uuid, commit}' /tmp/deployment.json; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "Timed out waiting for Coolify deployment ${deployment_uuid}"
+          exit 1
+      - name: Smoke production
+        env:
+          HEALTH_URL: ${{ vars.COOLIFY_HEALTH_URL }}
+        run: curl --fail-with-body --retry 12 --retry-delay 10 --retry-all-errors "$HEALTH_URL"

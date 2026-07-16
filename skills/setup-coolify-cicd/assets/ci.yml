@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [stage, main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test --if-present
+      - run: npm run lint --if-present
+      - run: npm run typecheck --if-present
+      - run: npm run build --if-present

@@ -2,10 +2,16 @@ import { Octokit } from "@octokit/rest";
 import { config } from "./env.js";
 import { labelColors, labels, statusLabels } from "./labels.js";
 
+const trustedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
 export type TrackerIssue = Awaited<ReturnType<GithubTracker["nextIssue"]>>;
 
 export class GithubTracker {
-  private readonly octokit = new Octokit({ auth: config.githubToken });
+  private readonly octokit: Octokit;
+
+  constructor(octokit: Octokit = new Octokit({ auth: config.githubToken })) {
+    this.octokit = octokit;
+  }
 
   async assertRepositoryAccess() {
     try {
@@ -52,7 +58,12 @@ export class GithubTracker {
     const running = await this.listIssues(labels.running);
     const candidates = [...todo, ...running].filter((issue) => {
       const issueLabels = issue.labels.map((label) => (typeof label === "string" ? label : label.name));
-      return !issue.pull_request && !issueLabels.includes(labels.needsHuman) && !issueLabels.includes(labels.finished);
+      return (
+        !issue.pull_request
+        && trustedAssociations.has(issue.author_association ?? "")
+        && !issueLabels.includes(labels.needsHuman)
+        && !issueLabels.includes(labels.finished)
+      );
     });
     return candidates[0] ?? null;
   }
@@ -68,6 +79,7 @@ export class GithubTracker {
       .filter((comment) => {
         const body = comment.body ?? "";
         return (
+          trustedAssociations.has(comment.author_association) &&
           !body.startsWith("Codex picked this up on branch") &&
           !body.startsWith("Human attention needed:\n\nCodex run failed before finishing.")
         );
@@ -78,7 +90,16 @@ export class GithubTracker {
   }
 
   async moveStatus(issueNumber: number, status: keyof Pick<typeof labels, "todo" | "running" | "finished">) {
+    const target = labels[status];
+    await this.octokit.rest.issues.addLabels({
+      owner: config.owner,
+      repo: config.repo,
+      issue_number: issueNumber,
+      labels: [target],
+    });
+
     for (const label of statusLabels) {
+      if (label === target) continue;
       try {
         await this.octokit.rest.issues.removeLabel({
           owner: config.owner,
@@ -90,13 +111,6 @@ export class GithubTracker {
         if ((error as { status?: number }).status !== 404) throw error;
       }
     }
-
-    await this.octokit.rest.issues.addLabels({
-      owner: config.owner,
-      repo: config.repo,
-      issue_number: issueNumber,
-      labels: [labels[status]],
-    });
   }
 
   async needsHuman(issueNumber: number, body: string) {
@@ -118,17 +132,42 @@ export class GithubTracker {
     });
   }
 
-  async createPullRequest(issueNumber: number, branch: string, title: string, body: string) {
-    const pr = await this.octokit.rest.pulls.create({
+  async findOrCreatePullRequest(issueNumber: number, branch: string, title: string, body: string) {
+    const existing = await this.findOpenPullRequest(branch);
+    if (existing) return existing;
+    try {
+      const pr = await this.octokit.rest.pulls.create({
+        owner: config.owner,
+        repo: config.repo,
+        base: config.baseBranch,
+        head: branch,
+        title: `Fix #${issueNumber}: ${title}`,
+        body,
+        maintainer_can_modify: true,
+        draft: true,
+      });
+      return pr.data.html_url;
+    } catch (error) {
+      try {
+        const createdDespiteError = await this.findOpenPullRequest(branch);
+        if (createdDespiteError) return createdDespiteError;
+      } catch {
+        // Preserve the create error; the persisted publish_pending state will retry later.
+      }
+      throw error;
+    }
+  }
+
+  private async findOpenPullRequest(branch: string) {
+    const response = await this.octokit.rest.pulls.list({
       owner: config.owner,
       repo: config.repo,
+      state: "open",
       base: config.baseBranch,
-      head: branch,
-      title: `Fix #${issueNumber}: ${title}`,
-      body,
-      maintainer_can_modify: true,
+      head: `${config.owner}:${branch}`,
+      per_page: 10,
     });
-    return pr.data.html_url;
+    return response.data[0]?.html_url;
   }
 
   private async listIssues(label: string) {

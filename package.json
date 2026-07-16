@@ -9,6 +9,8 @@
   "scripts": {
     "build": "npm run build --workspaces",
     "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run test --workspaces --if-present && npm run test:skills",
+    "test:skills": "python3 -m unittest discover -s tests -p 'test_*.py'",
     "dev:demo": "npm run dev -w apps/convex-demo",
     "dev:harness": "npm run dev -w services/issue-harness"
   },

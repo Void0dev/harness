@@ -1,0 +1,35 @@
+# Merge these jobs under `jobs:` in coolify-deploy.yml for NestJS/PostgreSQL.
+# Replace both placeholders with the exact commands from .harness/config.json.
+migration-stage:
+  if: github.ref_name == 'stage'
+  needs: verify
+  runs-on: ubuntu-latest
+  environment: stage
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+    - run: npm ci
+    - name: Migrate staging database
+      run: __HARNESS_MIGRATE_STAGE__
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+migration-production:
+  if: github.event_name == 'workflow_dispatch' && github.ref_name == 'main'
+  needs: verify
+  runs-on: ubuntu-latest
+  environment: production
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+    - run: npm ci
+    - name: Migrate production database after approval
+      run: __HARNESS_MIGRATE_PRODUCTION__
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}

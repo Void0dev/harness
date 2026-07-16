@@ -4,7 +4,13 @@ import { spawn } from "node:child_process";
 import { codex, run } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { config } from "./env.js";
+import { assertAgentRunPublishable, COMPLETION_MARKER, extractHumanQuestion } from "./completion.js";
 import { TrackerIssue } from "./github.js";
+import { branchHasCommits } from "./repository.js";
+import {
+  assertNoRepositoryEnvironmentPassthrough,
+  withSanitizedProcessEnvironment,
+} from "./security.js";
 
 export type AgentRunResult = {
   stdout: string;
@@ -12,19 +18,25 @@ export type AgentRunResult = {
   sessionId?: string;
 };
 
-export async function runAgent(issue: NonNullable<TrackerIssue>, branch: string, comments: string) {
+export async function runAgent(
+  issue: NonNullable<TrackerIssue>,
+  branch: string,
+  comments: string,
+  workspace: string,
+) {
   const codexHome = path.join(config.dataDir, "codex");
   const sandcastleLogDir = path.join(config.dataDir, "sandcastle");
   await fs.mkdir(codexHome, { recursive: true });
   await fs.mkdir(sandcastleLogDir, { recursive: true });
+  await assertNoRepositoryEnvironmentPassthrough(workspace);
   if (config.codexAuthMode === "api-key") {
     await ensureCodexApiKeyLogin(codexHome);
   }
 
   let result;
   try {
-    result = await run({
-      cwd: config.repoRoot,
+    result = await withSanitizedProcessEnvironment(() => run({
+      cwd: workspace,
       agent: codex(config.codexModel, {
         effort: config.codexReasoningEffort as "low" | "medium" | "high" | "xhigh",
         env: codexAgentEnv(),
@@ -48,7 +60,7 @@ export async function runAgent(issue: NonNullable<TrackerIssue>, branch: string,
         type: "branch",
         branch,
       },
-      promptFile: path.join(config.repoRoot, ".sandcastle", "prompt.md"),
+      promptFile: path.join(workspace, ".sandcastle", "prompt.md"),
       promptArgs: {
         ISSUE_NUMBER: String(issue.number),
         ISSUE_TITLE: issue.title,
@@ -58,20 +70,34 @@ export async function runAgent(issue: NonNullable<TrackerIssue>, branch: string,
       },
       maxIterations: 1,
       idleTimeoutSeconds: 900,
-      completionSignal: "<promise>COMPLETE</promise>",
+      completionSignal: COMPLETION_MARKER,
       logging: {
         type: "file",
         path: path.join(sandcastleLogDir, `issue-${issue.number}-${Date.now()}.log`),
       },
-    });
+    }));
   } catch (error) {
     const detail = await latestCodexSessionDiagnostic(codexHome);
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(detail ? `${message}\n\n${detail}` : message);
   }
 
+  const stdout = result.stdout ?? "";
+  const hasBranchCommits = extractHumanQuestion(stdout)
+    ? false
+    : result.commits.length > 0 || await branchHasCommits(
+      workspace,
+      `origin/${config.baseBranch}`,
+      branch,
+    );
+  assertAgentRunPublishable({
+    stdout,
+    completionSignal: result.completionSignal,
+    hasBranchCommits,
+  });
+
   return {
-    stdout: result.stdout ?? "",
+    stdout,
     logFilePath: result.logFilePath,
     sessionId: result.iterations.at(-1)?.sessionId,
   } satisfies AgentRunResult;
@@ -141,15 +167,9 @@ async function latestCodexSessionDiagnostic(codexHome: string) {
 }
 
 function codexAgentEnv() {
-  const env: Record<string, string> = {
+  return {
     CODEX_HOME: "/home/agent/.codex",
   };
-
-  if (config.codexAuthMode === "api-key") {
-    env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-  }
-
-  return env;
 }
 
 async function ensureCodexApiKeyLogin(codexHome: string) {
@@ -199,9 +219,4 @@ async function ensureCodexApiKeyLogin(codexHome: string) {
       );
     });
   });
-}
-
-export function extractHumanQuestion(stdout: string) {
-  const match = stdout.match(/<human-attention>([\s\S]*?)<\/human-attention>/i);
-  return match?.[1]?.trim();
 }
