@@ -23,6 +23,8 @@ def rendered_files(root: pathlib.Path) -> tuple[int, dict[pathlib.Path, bytes]]:
         root / ".github" / "workflows" / "backend-prepare.yml",
         root / ".github" / "workflows" / "coolify-rollback.yml",
         root / ".github" / "workflows" / "bootstrap-deployment-evidence.yml",
+        root / ".github" / "workflows" / "evidence-retention-checkpoint.yml",
+        root / ".harness" / "evidence_ledger.py",
     )
     validate_write_paths(root, destinations)
     raw_bytes = read_repository_file(root, config_path)
@@ -42,6 +44,8 @@ def rendered_files(root: pathlib.Path) -> tuple[int, dict[pathlib.Path, bytes]]:
         destinations[3]: workflows["backend-prepare.yml"].encode(),
         destinations[4]: workflows["coolify-rollback.yml"].encode(),
         destinations[5]: workflows["bootstrap-deployment-evidence.yml"].encode(),
+        destinations[6]: workflows["evidence-retention-checkpoint.yml"].encode(),
+        destinations[7]: (SKILL_DIR / "evidence_ledger.py").read_bytes(),
     }
 
 

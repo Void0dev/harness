@@ -17,11 +17,13 @@ import stat
 JOURNAL_NAME = "write-journal-v1.json"
 RECOVERABLE_PATHS = frozenset({
     ".harness/config.json",
+    ".harness/evidence_ledger.py",
     ".github/workflows/ci.yml",
     ".github/workflows/coolify-deploy.yml",
     ".github/workflows/backend-prepare.yml",
     ".github/workflows/coolify-rollback.yml",
     ".github/workflows/bootstrap-deployment-evidence.yml",
+    ".github/workflows/evidence-retention-checkpoint.yml",
 })
 
 

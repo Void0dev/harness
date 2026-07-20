@@ -13,12 +13,6 @@ on:
         required: true
         type: choice
         options: [import-existing, initialize-empty]
-      resource_uuid:
-        description: Exact Coolify application UUID
-        required: true
-      health_url:
-        description: Exact HTTPS health URL
-        required: true
       expected_revision:
         description: Import-existing full live revision; unused for initialize-empty
         required: false
@@ -32,27 +26,37 @@ permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: coolify-resource-${{ inputs.resource_uuid }}
-  cancel-in-progress: false
-
 jobs:
   bootstrap:
+    if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     environment: ${{ inputs.lane }}
+    concurrency:
+      group: coolify-resource-${{ vars.COOLIFY_RESOURCE_UUID }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
       - name: Create exact bootstrap record
         env:
           BOOTSTRAP_MODE: ${{ inputs.mode }}
           LANE: ${{ inputs.lane }}
-          RESOURCE_UUID: ${{ inputs.resource_uuid }}
-          HEALTH_URL: ${{ inputs.health_url }}
+          RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
+          HEALTH_URL: ${{ vars.COOLIFY_HEALTH_URL }}
           EXPECTED_REVISION: ${{ inputs.expected_revision }}
           EXISTING_DEPLOYMENT_UUID: ${{ inputs.existing_deployment_uuid }}
           COOLIFY_URL: ${{ vars.COOLIFY_URL }}
           COOLIFY_VERIFY_TOKEN: ${{ secrets.COOLIFY_VERIFY_TOKEN }}
+          COOLIFY_VERIFY_TOKEN_SCOPES: ${{ vars.COOLIFY_VERIFY_TOKEN_SCOPES }}
+          COOLIFY_VERIFY_TOKEN_EXPIRES_AT: ${{ vars.COOLIFY_VERIFY_TOKEN_EXPIRES_AT }}
+          COOLIFY_VERIFY_TOKEN_IP_ALLOWLISTED: ${{ vars.COOLIFY_VERIFY_TOKEN_IP_ALLOWLISTED }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          python3 .harness/evidence_ledger.py assert-bootstrap-available \
+            --repository "$GITHUB_REPOSITORY" --lane "$LANE" \
+            --resource-uuid "$RESOURCE_UUID" --health-url "$HEALTH_URL" \
+            --mode "$BOOTSTRAP_MODE"
           case "$BOOTSTRAP_MODE" in
             import-existing) python3 .harness/evidence_ledger.py bootstrap-import-existing --output evidence.json ;;
             initialize-empty) python3 .harness/evidence_ledger.py bootstrap-empty --schema empty-observation-v1 --output evidence.json ;;

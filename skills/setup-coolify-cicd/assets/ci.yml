@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [stage, main]
   pull_request:
     branches: [stage, main]
   workflow_call:

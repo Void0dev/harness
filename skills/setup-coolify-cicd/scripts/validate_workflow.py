@@ -235,7 +235,7 @@ def validate(repo: pathlib.Path) -> dict:
         "  id-token: write",
     ]
     if permissions_block != expected_permissions:
-        errors.append("workflow permissions must be exact read plus attestation publication scopes")
+        errors.append("workflow permissions must be exactly read plus attestation publication scopes")
     concurrency_block = exact_top_block(text, "concurrency")
     if concurrency_block != [
         "  group: coolify-${{ github.workflow }}-${{ github.event_name }}",
@@ -300,11 +300,19 @@ def validate(repo: pathlib.Path) -> dict:
     expected_delivery = compiled_workflows["coolify-deploy.yml"]
     if text != expected_delivery:
         errors.append("delivery workflow differs from the exact canonical compilation")
-    base_jobs = parse_jobs((assets / "coolify-deploy.yml").read_text())
+    if "GH_TOKEN: ${{ github.token }}" not in text:
+        errors.append("delivery evidence resolution must expose only the ephemeral github.token to gh")
+    compiled_jobs = parse_jobs(expected_delivery)
+    base_jobs = {
+        name: compiled_jobs[name]
+        for name in ("verify", "deploy-stage", "deploy-production")
+    }
     ci_path = repo / ".github" / "workflows" / "ci.yml"
     expected_ci = compiled_workflows["ci.yml"]
     if not ci_path.is_file() or ci_path.read_text() != expected_ci:
         errors.append("CI workflow differs from exact configured gates")
+    elif direct_top_block_keys(ci_path.read_text(), "on") != ["push", "pull_request", "workflow_call"]:
+        errors.append("CI triggers must be exactly stage/main push, pull_request, and workflow_call")
     auxiliary_texts = []
     auxiliary_specs = (
         (
@@ -319,6 +327,10 @@ def validate(repo: pathlib.Path) -> dict:
             "bootstrap-deployment-evidence.yml",
             "bootstrap workflow differs from exact canonical compilation",
         ),
+        (
+            "evidence-retention-checkpoint.yml",
+            "retention checkpoint workflow differs from exact canonical compilation",
+        ),
     )
     for name, mismatch_error in auxiliary_specs:
         path = repo / ".github" / "workflows" / name
@@ -330,21 +342,56 @@ def validate(repo: pathlib.Path) -> dict:
         auxiliary_texts.append(auxiliary_text)
         if auxiliary_text != expected:
             errors.append(mismatch_error)
+        if "GH_TOKEN: ${{ github.token }}" not in auxiliary_text:
+            errors.append(f"{name} evidence resolution must expose the ephemeral github.token to gh")
         auxiliary_syntax_error = yaml_syntax_error(auxiliary_text)
         if auxiliary_syntax_error:
             errors.append(f"{name}: {auxiliary_syntax_error}")
         if direct_top_block_keys(auxiliary_text, "on") != ["workflow_dispatch"]:
             errors.append(f"{name} trigger must be exactly workflow_dispatch")
         if exact_top_block(auxiliary_text, "permissions") != expected_permissions:
-            errors.append(f"{name} permissions must be exact read plus attestation publication scopes")
+            errors.append(f"{name} permissions must be exactly read plus attestation publication scopes")
         try:
             auxiliary_jobs = parse_jobs(auxiliary_text)
         except ValueError as exc:
             auxiliary_jobs = {}
             errors.append(f"{name}: {exc}")
-        expected_environment = "${{ inputs.lane }}" if name == "bootstrap-deployment-evidence.yml" else "production"
+        expected_environment = "${{ inputs.lane }}" if name in {
+            "bootstrap-deployment-evidence.yml",
+            "evidence-retention-checkpoint.yml",
+        } else "production"
         if not auxiliary_jobs or any(job.get("environment") != expected_environment for job in auxiliary_jobs.values()):
             errors.append(f"{name} jobs must use the exact protected environment contract")
+        if exact_top_block(auxiliary_text, "concurrency") != exact_top_block(expected, "concurrency"):
+            errors.append(f"{name} concurrency contract is invalid")
+        if name == "backend-prepare.yml":
+            if any(
+                "github.ref_name == 'main'" not in condition(str(job.get("if", "")))
+                for job in auxiliary_jobs.values()
+            ):
+                errors.append("backend preparation jobs must be main-only before protected environment access")
+            required_trusted_receipt_tokens = (
+                "/usr/bin/env -i PATH=/usr/bin:/bin",
+                "/usr/bin/git -C trusted show \"$TRUSTED_SHA:.harness/evidence_ledger.py\"",
+                "/usr/bin/python3 - backend-receipt",
+            )
+            if not all(token in auxiliary_text for token in required_trusted_receipt_tokens):
+                errors.append("backend receipts must stream the ledger from a scrubbed immutable trusted Git object")
+        if name == "bootstrap-deployment-evidence.yml":
+            if "assert-bootstrap-available" not in auxiliary_text:
+                errors.append("bootstrap must refuse an existing authenticated deployment chain before emitting sequence 0")
+            if "${{ inputs.resource_uuid }}" in auxiliary_text or "${{ inputs.health_url }}" in auxiliary_text:
+                errors.append("bootstrap must bind resource UUID and health URL only from its protected environment")
+            if (
+                "RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}" not in auxiliary_text
+                or "HEALTH_URL: ${{ vars.COOLIFY_HEALTH_URL }}" not in auxiliary_text
+            ):
+                errors.append("bootstrap must provide protected resource UUID and health URL to the ledger")
+        if name == "evidence-retention-checkpoint.yml":
+            if any(condition(str(job.get("if", ""))) != "github.ref_name == 'main'" for job in auxiliary_jobs.values()):
+                errors.append("retention checkpoint jobs must be main-only")
+            if "create-retention-checkpoint" not in auxiliary_text:
+                errors.append("retention checkpoint must create a verified ledger checkpoint")
 
     for workflow_text in (
         text,
@@ -366,14 +413,19 @@ def validate(repo: pathlib.Path) -> dict:
         errors.append("missing reviewed .harness/coolify_client.py")
     elif installed_client.read_bytes() != reviewed_client.read_bytes():
         errors.append("Coolify client differs from the reviewed template")
+    installed_ledger = repo / ".harness" / "evidence_ledger.py"
+    reviewed_ledger = pathlib.Path(__file__).resolve().parents[1] / "evidence_ledger.py"
+    if not installed_ledger.is_file():
+        errors.append("missing reviewed .harness/evidence_ledger.py")
+    elif installed_ledger.read_bytes() != reviewed_ledger.read_bytes():
+        errors.append("evidence ledger differs from the reviewed template")
     if verify and normalized_job_lines(verify) != normalized_job_lines(base_jobs["verify"]):
         errors.append("verify differs from the reviewed reusable-workflow template")
 
-    compiled_jobs = parse_jobs(expected_delivery)
     expected_gate_jobs = {
         job_name: job
         for job_name, job in compiled_jobs.items()
-        if job_name not in base_jobs
+        if job_name not in {"verify", "deploy-stage", "deploy-production"}
     }
 
     conditions = {
@@ -392,20 +444,20 @@ def validate(repo: pathlib.Path) -> dict:
                 errors.append(f"deployment.gateRunners.{lane} must be a literal reviewed runner label")
             elif scalar(str(job.get("runs-on", ""))) != expected_runner:
                 errors.append(f"{job_name} must use the configured {lane} gate runner")
-            if "verify" not in needs(str(job.get("needs", ""))):
+            if lane == "production" and "verify" not in needs(str(job.get("needs", ""))):
                 errors.append(f"{job_name} must depend on verify")
             if job.get("environment") != lane:
                 errors.append(f"{job_name} must use environment: {lane}")
             expected_gate = expected_gate_jobs.get(job_name)
             expected_runs = (
-                expected_gate.get("_scalar_runs", []) if lane == "production" and expected_gate
+                expected_gate.get("_run_content", []) if lane == "production" and expected_gate
                 else [install_command, gate_commands.get(job_name)]
             )
-            if not all(expected_runs) or job.get("_scalar_runs") != expected_runs:
-                if lane == "production":
-                    errors.append(f"{job_name} must validate only canonical prepared backend evidence")
-                else:
-                    errors.append(f"{job_name} must run exactly commands.install then its configured stack command")
+            if lane == "production":
+                if not expected_runs or job.get("_run_content") != expected_runs:
+                    errors.append(f"{job_name} must resolve and validate only canonical prepared backend evidence")
+            elif not all(expected_runs) or job.get("_scalar_runs") != expected_runs:
+                errors.append(f"{job_name} must run exactly commands.install then its configured stack command")
             actions = job.get("_step_uses", [])
             expected_actions = [CHECKOUT_ACTION] if lane == "production" else [CHECKOUT_ACTION, SETUP_NODE_ACTION]
             if actions != expected_actions:
@@ -431,7 +483,7 @@ def validate(repo: pathlib.Path) -> dict:
         validate_job_controls(deploy_name, deploy, deploy_condition, errors)
         if deploy.get("environment") != lane:
             errors.append(f"{deploy_name} must use environment: {lane}")
-        expected_needs = set(gate_jobs or ["verify"])
+        expected_needs = set(gate_jobs or (["verify"] if lane == "production" else []))
         actual_needs = needs(str(deploy.get("needs", "")))
         if actual_needs != expected_needs:
             errors.append(f"{deploy_name} dependencies must be exactly: {', '.join(sorted(expected_needs))}")
@@ -442,15 +494,36 @@ def validate(repo: pathlib.Path) -> dict:
             "--resource-uuid",
             "--revision",
             "--health-url",
+            "--rollback-evidence",
+            "--record-output",
         )
         if not all(token in run_content for token in required_delivery_tokens):
             errors.append(f"{deploy_name} must deploy, poll the immutable commit, and smoke health")
+        if lane == "production" and "consume --deployment .harness/target-successor.json" not in run_content:
+            errors.append("deploy-production consumption must bind the local target successor evidence")
+        recovery = job_lines(deploy)
+        compensation_index = recovery.find(".harness/evidence_ledger.py compensate")
+        if (
+            "if: failure() && steps.deploy.outcome == 'success'" not in recovery
+            or compensation_index == -1
+            or "exit 1" not in recovery[compensation_index:]
+        ):
+            errors.append(f"{deploy_name} compensation must leave the failed run failed after restoring its predecessor")
+        if lane == "production" and any(
+            token in recovery
+            for token in (
+                "restoration-successor",
+                "restoration.json",
+                "deployment-restoration-",
+            )
+        ):
+            errors.append("failed runs must not publish authority after compensation")
         if normalized_job_lines(deploy, {"needs"}) != normalized_job_lines(base_jobs[deploy_name], {"needs"}):
             errors.append(f"{deploy_name} differs from the reviewed deploy/poll/smoke template")
-        secret_refs = SECRET_REFERENCE.findall(job_lines(deploy))
-        if secret_refs != ["COOLIFY_PIN_TOKEN", "COOLIFY_DEPLOY_TOKEN"]:
+        secret_refs = set(SECRET_REFERENCE.findall(job_lines(deploy)))
+        if secret_refs != {"COOLIFY_VERIFY_TOKEN", "COOLIFY_PIN_TOKEN", "COOLIFY_DEPLOY_TOKEN"}:
             errors.append(
-                f"{deploy_name} must reference only the separate pin and deploy Coolify tokens"
+                f"{deploy_name} must reference only the separate verify, pin, and deploy Coolify tokens"
             )
 
     return {

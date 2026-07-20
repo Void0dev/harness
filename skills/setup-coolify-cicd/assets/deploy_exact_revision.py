@@ -38,6 +38,15 @@ SUCCESS_RECORD_FIELDS = frozenset({
 SUCCESS_RECORD_TYPE = "coolify-exact-deployment"
 SUCCESS_RECORD_WRITER = "project-harness/deploy_exact_revision.py"
 MAX_EVIDENCE_BYTES = 16 * 1024
+LEDGER_ENVELOPE_FIELDS = frozenset({"locator", "record"})
+LEDGER_LOCATOR_FIELDS = frozenset({
+    "repository", "runId", "artifactId", "artifactName", "fileName", "sha256",
+})
+LEDGER_DEPLOYMENT_FIELDS = frozenset({
+    "schema", "repository", "lane", "provider", "resourceUuid", "revision",
+    "deploymentUuid", "healthUrlSha256", "healthVerified", "autoDeployDisabled",
+    "sequence", "predecessor", "target", "producer", "outcome",
+})
 
 
 class RollbackFailedError(RuntimeError):
@@ -122,7 +131,60 @@ def load_successful_deployment_record(
         payload = json.loads(raw)
     except json.JSONDecodeError:
         raise ValueError("trusted rollback evidence contains invalid JSON") from None
+    if isinstance(payload, dict) and set(payload) == LEDGER_ENVELOPE_FIELDS:
+        payload = _local_record_from_ledger_envelope(payload, raw, resource_uuid, health_url)
     return validate_successful_deployment_record(payload, resource_uuid, health_url)
+
+
+def _local_record_from_ledger_envelope(
+    envelope: dict,
+    raw: bytes,
+    resource_uuid: str,
+    health_url: str,
+) -> dict:
+    canonical_envelope = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if raw != canonical_envelope:
+        raise ValueError("trusted rollback evidence envelope must be canonical JSON")
+    locator = envelope.get("locator")
+    record = envelope.get("record")
+    if not isinstance(locator, dict) or set(locator) != LEDGER_LOCATOR_FIELDS:
+        raise ValueError("trusted rollback evidence envelope has an invalid locator")
+    if not isinstance(record, dict) or set(record) != LEDGER_DEPLOYMENT_FIELDS:
+        raise ValueError("trusted rollback evidence envelope has an invalid deployment record")
+    record_bytes = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if locator.get("sha256") != hashlib.sha256(record_bytes).hexdigest():
+        raise ValueError("trusted rollback evidence envelope digest does not match its record")
+    if (
+        locator.get("repository") != record.get("repository")
+        or locator.get("fileName") != "evidence.json"
+        or type(locator.get("runId")) is not int
+        or type(locator.get("artifactId")) is not int
+        or not isinstance(locator.get("artifactName"), str)
+        or not RESOURCE_REF.fullmatch(locator["artifactName"])
+    ):
+        raise ValueError("trusted rollback evidence envelope locator bindings are invalid")
+    producer = record.get("producer")
+    if not isinstance(producer, dict) or producer.get("runId") != locator["runId"]:
+        raise ValueError("trusted rollback evidence envelope producer does not match its locator")
+    if (
+        record.get("schema") != "deployment-success-v1"
+        or record.get("provider") != "coolify"
+        or record.get("lane") not in {"stage", "production"}
+        or record.get("autoDeployDisabled") is not True
+    ):
+        raise ValueError("trusted rollback evidence envelope is not an authorizing deployment record")
+    local = {
+        "schemaVersion": 1,
+        "recordType": SUCCESS_RECORD_TYPE,
+        "writer": SUCCESS_RECORD_WRITER,
+        "resourceUuid": record.get("resourceUuid"),
+        "revision": record.get("revision"),
+        "deploymentUuid": record.get("deploymentUuid"),
+        "healthUrlSha256": record.get("healthUrlSha256"),
+        "healthVerified": record.get("healthVerified"),
+        "outcome": record.get("outcome"),
+    }
+    return validate_successful_deployment_record(local, resource_uuid, health_url)
 
 
 def successful_deployment_record(result: dict) -> dict:
@@ -393,7 +455,11 @@ def main() -> int:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--health-url", required=True)
     parser.add_argument("--lock-dir", default=".harness/locks")
+    parser.add_argument("--rollback-evidence")
+    parser.add_argument("--record-output")
     args = parser.parse_args()
+    if bool(args.rollback_evidence) != bool(args.record_output):
+        raise ValueError("--rollback-evidence and --record-output must be supplied together")
     base_url = os.getenv("COOLIFY_URL")
     pin_token = os.getenv("COOLIFY_PIN_TOKEN")
     deploy_token = os.getenv("COOLIFY_DEPLOY_TOKEN")
@@ -404,14 +470,16 @@ def main() -> int:
     pin_policy = AccessPolicy.from_environment("pin", os.environ, prefix="COOLIFY_PIN_TOKEN")
     deploy_policy = AccessPolicy.from_environment("deploy", os.environ, prefix="COOLIFY_DEPLOY_TOKEN")
     with resource_lock(pathlib.Path(args.lock_dir), args.resource_uuid):
-        evidence_path = pathlib.Path(args.lock_dir).parent / "deployment-evidence" / (
+        default_evidence_path = pathlib.Path(args.lock_dir).parent / "deployment-evidence" / (
             hashlib.sha256(args.resource_uuid.encode()).hexdigest() + ".json"
         )
+        rollback_path = pathlib.Path(args.rollback_evidence) if args.rollback_evidence else default_evidence_path
+        evidence_path = pathlib.Path(args.record_output) if args.record_output else default_evidence_path
         event_path = pathlib.Path(args.lock_dir).parent / "deployment-events" / (
             hashlib.sha256(args.resource_uuid.encode()).hexdigest() + ".json"
         )
         rollback_evidence = load_successful_deployment_record(
-            evidence_path, args.resource_uuid, args.health_url
+            rollback_path, args.resource_uuid, args.health_url
         )
         report = deploy_exact_revision(
             CoolifyClient(base_url, pin_token, pin_policy),

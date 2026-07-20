@@ -85,19 +85,30 @@ def compile_workflows(config: dict, assets_dir: pathlib.Path) -> dict[str, str]:
             "production preparation command omitted from main delivery",
         )
         if "coolify.postgresql" in kinds:
-            fragment = _replace_first(fragment, "needs: verify", "needs: [verify, migration-stage]")
-            fragment = _replace_first(fragment, "needs: verify", "needs: [verify, migration-production]")
+            fragment = _replace_first(
+                fragment,
+                f"  runs-on: {gate_runners['stage']}",
+                f"  needs: migration-stage\n  runs-on: {gate_runners['stage']}",
+            )
+            fragment = _replace_first(
+                fragment,
+                "needs: verify",
+                "needs: [verify, migration-production]",
+            )
         fragments.append(fragment)
         stage_gates.append("backend-stage")
         production_gates.append("backend-production")
 
-    if stage_gates:
-        delivery = _replace_first(delivery, "needs: verify", f"needs: {_needs_value(stage_gates)}")
-        delivery = _replace_first(
-            delivery,
-            "needs: verify",
-            f"needs: {_needs_value(production_gates)}",
-        )
+    delivery = _replace_placeholder(
+        delivery,
+        "__HARNESS_STAGE_DEPLOY_NEEDS__",
+        f"    needs: {_needs_value(stage_gates)}" if stage_gates else "",
+    )
+    delivery = _replace_placeholder(
+        delivery,
+        "__HARNESS_PRODUCTION_DEPLOY_NEEDS__",
+        f"    needs: {_needs_value(production_gates or ['verify'])}",
+    )
     if fragments:
         indented = "\n".join(
             f"  {line}" if line else line
@@ -118,12 +129,19 @@ def compile_workflows(config: dict, assets_dir: pathlib.Path) -> dict[str, str]:
         "runs-on: ubuntu-latest",
         f"runs-on: {gate_runners['production']}",
     )
+    checkpoint = (assets_dir / "evidence-retention-checkpoint.yml").read_text()
+    checkpoint = _replace_first(
+        checkpoint,
+        "runs-on: ubuntu-latest",
+        f"runs-on: {gate_runners['production']}",
+    )
     compiled = {
         "ci.yml": ci,
         "coolify-deploy.yml": delivery,
         "backend-prepare.yml": backend_prepare,
         "coolify-rollback.yml": rollback,
         "bootstrap-deployment-evidence.yml": bootstrap,
+        "evidence-retention-checkpoint.yml": checkpoint,
     }
     if any("__HARNESS_" in text for text in compiled.values()):
         raise ValueError("compiled workflow contains unresolved __HARNESS_* placeholders")
@@ -144,6 +162,8 @@ def compile_backend_prepare_workflow(config: dict, assets_dir: pathlib.Path) -> 
     install = _yaml_string(config["commands"]["install"])
     runner = config["deployment"]["gateRunners"]["production"]
     fragments = []
+    input_blocks = []
+    expected_capabilities = []
     if "coolify.postgresql" in kinds:
         postgres = single_capability(config, "coolify.postgresql")
         fragment = (assets_dir / "backend-prepare-postgres.yml").read_text()
@@ -153,6 +173,8 @@ def compile_backend_prepare_workflow(config: dict, assets_dir: pathlib.Path) -> 
             fragment, "__HARNESS_PREPARE_POSTGRES__", _yaml_string(postgres["commands"]["deployProduction"])
         )
         fragments.append(fragment)
+        input_blocks.append(_backend_input_block("postgres", "PostgreSQL"))
+        expected_capabilities.append("postgres")
     if "convex.deployment" in kinds:
         convex = single_capability(config, "convex.deployment")
         fragment = (assets_dir / "backend-prepare-convex.yml").read_text()
@@ -164,6 +186,8 @@ def compile_backend_prepare_workflow(config: dict, assets_dir: pathlib.Path) -> 
         needs = "needs: postgres-prepare-production" if "coolify.postgresql" in kinds else ""
         fragment = _replace_placeholder(fragment, "__HARNESS_CONVEX_NEEDS__", needs)
         fragments.append(fragment)
+        input_blocks.append(_backend_input_block("convex", "Convex"))
+        expected_capabilities.append("convex")
     if fragments:
         jobs = "\n".join(
             f"  {line}" if line else line
@@ -173,7 +197,7 @@ def compile_backend_prepare_workflow(config: dict, assets_dir: pathlib.Path) -> 
     else:
         jobs = (
             "  no-backend-preparation:\n"
-            "    if: ${{ false }}\n"
+            "    if: github.ref_name == 'main' && false\n"
             f"    runs-on: {runner}\n"
             "    environment: production\n"
             "    steps:\n"
@@ -183,6 +207,19 @@ def compile_backend_prepare_workflow(config: dict, assets_dir: pathlib.Path) -> 
         (assets_dir / "backend-prepare.yml").read_text(),
         "__HARNESS_BACKEND_PREPARE_JOBS__",
         jobs,
+    )
+    workflow = _replace_placeholder(
+        workflow,
+        "__HARNESS_BACKEND_INPUTS__",
+        "".join(input_blocks),
+    )
+    workflow = _replace_placeholder(
+        workflow,
+        "__HARNESS_EXPECTED_CAPABILITIES__",
+        " ".join(
+            f"--expected-capability {capability}"
+            for capability in expected_capabilities
+        ),
     )
     workflow = _replace_placeholder(
         workflow,
@@ -251,4 +288,19 @@ def _compile_gate_runners(fragment: str, runners: dict[str, str]) -> str:
         fragment,
         "runs-on: ubuntu-latest",
         f"runs-on: {runners['production']}",
+    )
+
+
+def _backend_input_block(prefix: str, label: str) -> str:
+    fields = (
+        ("resource_ref", f"Exact {label} production resource reference"),
+        ("previous_revision", f"Previous {label} revision or release identifier"),
+        ("backup_ref", f"Reviewed {label} backup or recovery reference"),
+        ("receipt_sha256", f"Lowercase SHA-256 operator assertion for the reviewed {label} preparation receipt"),
+    )
+    return "".join(
+        f"      {prefix}_{field}:\n"
+        f"        description: {description}\n"
+        "        required: true\n"
+        for field, description in fields
     )

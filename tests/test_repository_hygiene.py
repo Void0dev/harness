@@ -112,6 +112,7 @@ class RepositoryHygieneTest(unittest.TestCase):
             ".harness/config.json",
             ".harness/coolify_client.py",
             ".harness/deploy_exact_revision.py",
+            ".harness/evidence_ledger.py",
             ".env.example",
             "services/example/.env.example",
             ".sandcastle/Dockerfile",
@@ -131,6 +132,7 @@ class RepositoryHygieneTest(unittest.TestCase):
             ".harness/config.json",
             ".harness/coolify_client.py",
             ".harness/deploy_exact_revision.py",
+            ".harness/evidence_ledger.py",
         }
         forbidden = []
         for filename in tracked:

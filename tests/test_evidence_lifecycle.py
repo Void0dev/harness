@@ -5,6 +5,7 @@ import pathlib
 import stat
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -116,7 +117,7 @@ class FakeRunner:
 
 
 class EvidenceLifecycleTest(unittest.TestCase):
-    def test_compiler_emits_five_authenticated_lifecycle_workflows(self):
+    def test_compiler_emits_authenticated_lifecycle_workflows(self):
         import importlib.util
         import sys
 
@@ -136,6 +137,7 @@ class EvidenceLifecycleTest(unittest.TestCase):
             "backend-prepare.yml",
             "coolify-rollback.yml",
             "bootstrap-deployment-evidence.yml",
+            "evidence-retention-checkpoint.yml",
         })
         deploy = compiled["coolify-deploy.yml"]
         self.assertIn("workflow_run:", deploy)
@@ -164,6 +166,10 @@ class EvidenceLifecycleTest(unittest.TestCase):
         self.assertIn("initialize-empty", bootstrap)
         self.assertIn("empty-observation-v1", bootstrap)
         self.assertIn("environment: ${{ inputs.lane }}", bootstrap)
+
+        checkpoint = compiled["evidence-retention-checkpoint.yml"]
+        self.assertIn("create-retention-checkpoint", checkpoint)
+        self.assertIn("retention-checkpoint-", checkpoint)
 
     def test_exact_schema_canonical_json_and_secure_staging(self):
         ledger = load_ledger()
@@ -305,9 +311,12 @@ class EvidenceLifecycleTest(unittest.TestCase):
         self.assertEqual(resolved, record)
         attest = next(command for command in runner.commands if command[:3] == ["gh", "attestation", "verify"])
         self.assertIn("--signer-workflow", attest)
-        self.assertIn(f"{REPO}/.github/workflows/coolify-deploy.yml@refs/heads/main", attest)
+        self.assertIn(f"{REPO}/.github/workflows/coolify-deploy.yml", attest)
+        self.assertNotIn(f"{REPO}/.github/workflows/coolify-deploy.yml@refs/heads/main", attest)
         self.assertIn("--source-ref", attest)
         self.assertIn("refs/heads/main", attest)
+        self.assertIn("--source-digest", attest)
+        self.assertIn("f" * 40, attest)
 
         cases = []
         cases.append((FakeRunner(record, artifact={**runner.artifact, "expired": True}), live, "expired"))
@@ -330,6 +339,69 @@ class EvidenceLifecycleTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "full Git"):
             ledger.derive_rollback_revision({**deployment(), "revision": "main"})
 
+    def test_retention_checkpoint_reroots_only_verified_head_and_expires_fail_closed(self):
+        ledger = load_ledger()
+        now = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+        genesis = deployment()
+        genesis_locator = locator(sha=hashlib.sha256(ledger.canonical_json(genesis)).hexdigest())
+        head = deployment(1, genesis_locator, "b" * 40, 101)
+        head_locator = locator(1, 101, 201, "deployment-stage-101-1", hashlib.sha256(ledger.canonical_json(head)).hexdigest())
+
+        checkpoint = ledger.build_retention_checkpoint(
+            head_locator,
+            head,
+            producer=producer(102, ".github/workflows/evidence-retention-checkpoint.yml"),
+            now=now,
+        )
+        checkpoint_locator = locator(
+            0,
+            102,
+            202,
+            "retention-checkpoint-stage-102-1",
+            hashlib.sha256(ledger.canonical_json(checkpoint)).hexdigest(),
+        )
+        resolved_locator, resolved = ledger.resolve_current_delivery_head(
+            [(genesis_locator, genesis), (head_locator, head), (checkpoint_locator, checkpoint)],
+            now=now + timedelta(minutes=1),
+        )
+        self.assertEqual(resolved_locator, checkpoint_locator)
+        self.assertEqual(resolved["schema"], "retention-checkpoint-v1")
+        self.assertEqual(checkpoint["epoch"], 1)
+        self.assertEqual(checkpoint["supersededHeadSha256"], head_locator["sha256"])
+
+        successor = deployment(1, checkpoint_locator, "c" * 40, 103)
+        successor_locator = locator(
+            1,
+            103,
+            203,
+            "deployment-stage-103-1",
+            hashlib.sha256(ledger.canonical_json(successor)).hexdigest(),
+        )
+        recovered_locator, recovered = ledger.resolve_current_delivery_head(
+            [(checkpoint_locator, checkpoint), (successor_locator, successor)],
+            now=now + timedelta(minutes=2),
+        )
+        self.assertEqual(recovered_locator, successor_locator)
+        self.assertEqual(recovered["revision"], "c" * 40)
+
+        arbitrary_root = deployment(0, None, "d" * 40, 104)
+        arbitrary_locator = locator(
+            0,
+            104,
+            204,
+            "deployment-stage-104-1",
+            hashlib.sha256(ledger.canonical_json(arbitrary_root)).hexdigest(),
+        )
+        with self.assertRaisesRegex(ValueError, "unique current head"):
+            ledger.resolve_current_delivery_head(
+                [(checkpoint_locator, checkpoint), (successor_locator, successor), (arbitrary_locator, arbitrary_root)],
+                now=now + timedelta(minutes=2),
+            )
+        with self.assertRaisesRegex(ValueError, "expired"):
+            ledger.resolve_current_delivery_head(
+                [(checkpoint_locator, checkpoint), (successor_locator, successor)],
+                now=now + timedelta(days=91),
+            )
 
 if __name__ == "__main__":
     unittest.main()

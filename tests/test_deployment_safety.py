@@ -189,6 +189,71 @@ class DeploymentSafetyTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "invalid JSON"):
                 module.load_successful_deployment_record(path, "app-stage", health_url)
 
+    def test_exact_deploy_accepts_only_canonical_digest_bound_ledger_envelope(self):
+        module = load("assets/deploy_exact_revision.py", "deployment_ledger_envelope")
+        health_url = "https://stage.example.test/ready"
+        record = {
+            "schema": "deployment-success-v1",
+            "repository": "acme/service",
+            "lane": "stage",
+            "provider": "coolify",
+            "resourceUuid": "app-stage",
+            "revision": "b" * 40,
+            "deploymentUuid": "deployment-prior",
+            "healthUrlSha256": hashlib.sha256(health_url.encode()).hexdigest(),
+            "healthVerified": True,
+            "autoDeployDisabled": True,
+            "sequence": 3,
+            "predecessor": None,
+            "target": {"revision": "b" * 40, "ciRunId": 77, "ciWorkflowPath": ".github/workflows/ci.yml"},
+            "producer": {"runId": 41},
+            "outcome": "deployment-succeeded",
+        }
+        record_bytes = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        envelope = {
+            "locator": {
+                "repository": "acme/service",
+                "runId": 41,
+                "artifactId": 51,
+                "artifactName": "deployment-stage-41-1",
+                "fileName": "evidence.json",
+                "sha256": hashlib.sha256(record_bytes).hexdigest(),
+            },
+            "record": record,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "predecessor.json"
+            path.write_bytes((json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode())
+            loaded = module.load_successful_deployment_record(path, "app-stage", health_url)
+            self.assertEqual(loaded["revision"], "b" * 40)
+            self.assertEqual(loaded["deploymentUuid"], "deployment-prior")
+
+            tampered = json.loads(path.read_text())
+            tampered["locator"]["sha256"] = "0" * 64
+            path.write_bytes((json.dumps(tampered, sort_keys=True, separators=(",", ":")) + "\n").encode())
+            with self.assertRaisesRegex(ValueError, "digest"):
+                module.load_successful_deployment_record(path, "app-stage", health_url)
+
+            path.write_text(json.dumps(envelope, indent=2))
+            with self.assertRaisesRegex(ValueError, "canonical JSON"):
+                module.load_successful_deployment_record(path, "app-stage", health_url)
+
+    def test_exact_deploy_explicit_path_flags_are_atomic_as_a_pair(self):
+        module = load("assets/deploy_exact_revision.py", "deployment_explicit_paths")
+        original_argv = sys.argv
+        try:
+            sys.argv = [
+                "deploy_exact_revision.py",
+                "--resource-uuid", "app-stage",
+                "--revision", "a" * 40,
+                "--health-url", "https://stage.example.test/ready",
+                "--rollback-evidence", "predecessor.json",
+            ]
+            with self.assertRaisesRegex(ValueError, "supplied together"):
+                module.main()
+        finally:
+            sys.argv = original_argv
+
     def test_split_deploy_credentials_must_be_distinct(self):
         module = load("assets/deploy_exact_revision.py", "deployment_split_credentials")
         original_argv = sys.argv
@@ -244,6 +309,68 @@ class DeploymentSafetyTest(unittest.TestCase):
         })
         with self.assertRaisesRegex(ValueError, "registered compiler/verifier"):
             compiler.compile_workflows(unknown, SETUP / "assets")
+
+    def test_compiled_workflows_use_immutable_cross_run_evidence_contract(self):
+        config_module = load("harness_config.py", "durable_evidence_config")
+        raw = json.loads((SETUP / "assets" / "config.example.json").read_text())
+        workflows = config_module.compile_workflows(raw, SETUP / "assets")
+        ci = workflows["ci.yml"]
+        delivery = workflows["coolify-deploy.yml"]
+        backend = workflows["backend-prepare.yml"]
+        rollback = workflows["coolify-rollback.yml"]
+        bootstrap = workflows["bootstrap-deployment-evidence.yml"]
+        checkpoint = workflows["evidence-retention-checkpoint.yml"]
+
+        self.assertIn("push:\n    branches: [stage, main]", ci)
+        self.assertIn("ref: ${{ github.event.workflow_run.head_sha }}", delivery)
+        self.assertIn("name: Check out trusted main workflow tooling", delivery)
+        self.assertIn("ref: ${{ github.sha }}", delivery)
+        self.assertIn("--target-ci-run-id \"$TARGET_CI_RUN_ID\"", delivery)
+        self.assertIn("--resource-uuid \"$COOLIFY_RESOURCE_UUID\"", delivery)
+        self.assertIn("--rollback-evidence .harness/predecessor-ledger.json", delivery)
+        self.assertIn("--record-output .harness/deployment-evidence/current.json", delivery)
+        self.assertIn("--deploy-record .harness/deployment-evidence/current.json", delivery)
+        self.assertIn("--health-url \"$COOLIFY_HEALTH_URL\"", delivery)
+        self.assertEqual(delivery.count("GH_TOKEN: ${{ github.token }}"), 5)
+        self.assertIn("  actions: read", delivery)
+        self.assertIn("  attestations: write", delivery)
+        self.assertIn("--expected-capability postgres --expected-capability convex", backend)
+        self.assertIn("--receipt-sha256 \"$RECEIPT_SHA256\"", backend)
+        self.assertIn("group: coolify-resource-${{ inputs.resource_uuid }}", backend)
+        self.assertIn("path: trusted", backend)
+        self.assertIn("path: source", backend)
+        self.assertIn("/usr/bin/env -i PATH=/usr/bin:/bin", backend)
+        self.assertIn('/usr/bin/git -C trusted show "$TRUSTED_SHA:.harness/evidence_ledger.py"', backend)
+        self.assertIn("/usr/bin/python3 - backend-receipt", backend)
+        self.assertNotIn("python3 trusted/.harness/evidence_ledger.py", backend)
+        self.assertIn("working-directory: source", backend)
+        self.assertIn('test "$PREPARED_REVISION" = "$GITHUB_SHA"', backend)
+        self.assertIn("if: github.ref_name == 'main'", backend)
+        self.assertEqual(backend.count("GH_TOKEN: ${{ github.token }}"), 1)
+        self.assertIn("consume --deployment .harness/target-successor.json", delivery)
+        self.assertIn("published-locator", delivery)
+        self.assertNotIn("restoration-successor", delivery)
+        self.assertNotIn("restoration.json", delivery)
+        self.assertNotIn("deployment-restoration-", delivery)
+        self.assertLess(delivery.index("Publish successor evidence"), delivery.index("Build backend consumption evidence"))
+        self.assertLess(delivery.index("Build backend consumption evidence"), delivery.index("Compensate to verified predecessor", delivery.index("deploy-production:")))
+        compensation = delivery.index("Compensate to verified predecessor", delivery.index("deploy-production:"))
+        self.assertIn("          exit 1", delivery[compensation:])
+        self.assertEqual(delivery.count("          exit 1"), 2)
+        self.assertIn("--historical", rollback)
+        self.assertNotIn("rollback_revision:", rollback)
+        self.assertEqual(rollback.count("GH_TOKEN: ${{ github.token }}"), 1)
+        self.assertIn("options: [import-existing, initialize-empty]", bootstrap)
+        self.assertIn("bootstrap-empty --schema empty-observation-v1", bootstrap)
+        self.assertIn("assert-bootstrap-available", bootstrap)
+        self.assertNotIn("${{ inputs.resource_uuid }}", bootstrap)
+        self.assertNotIn("${{ inputs.health_url }}", bootstrap)
+        self.assertIn("RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}", bootstrap)
+        self.assertIn("HEALTH_URL: ${{ vars.COOLIFY_HEALTH_URL }}", bootstrap)
+        self.assertEqual(bootstrap.count("GH_TOKEN: ${{ github.token }}"), 1)
+        self.assertIn("if: github.ref_name == 'main'", checkpoint)
+        self.assertIn("create-retention-checkpoint", checkpoint)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", checkpoint)
 
     def test_offline_plan_tolerates_unresolved_bindings_and_reports_all_lanes(self):
         with tempfile.TemporaryDirectory() as directory:

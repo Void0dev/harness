@@ -30,6 +30,8 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
       - name: Resolve current head and target evidence; derive revision
         id: resolve
         env:
@@ -38,13 +40,20 @@ jobs:
           TARGET_ARTIFACT_NAME: ${{ inputs.target_evidence_artifact_name }}
           COOLIFY_RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
           COOLIFY_HEALTH_URL: ${{ vars.COOLIFY_HEALTH_URL }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          COOLIFY_VERIFY_TOKEN: ${{ secrets.COOLIFY_VERIFY_TOKEN }}
+          COOLIFY_VERIFY_TOKEN_SCOPES: ${{ vars.COOLIFY_VERIFY_TOKEN_SCOPES }}
+          COOLIFY_VERIFY_TOKEN_EXPIRES_AT: ${{ vars.COOLIFY_VERIFY_TOKEN_EXPIRES_AT }}
+          COOLIFY_VERIFY_TOKEN_IP_ALLOWLISTED: ${{ vars.COOLIFY_VERIFY_TOKEN_IP_ALLOWLISTED }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 .harness/evidence_ledger.py resolve-stage-head --repository "$GITHUB_REPOSITORY" \
             --lane production --resource-uuid "$COOLIFY_RESOURCE_UUID" --health-url "$COOLIFY_HEALTH_URL" \
             --output .harness/current-head.json --deploy-record-output .harness/deployment-evidence/current.json
           python3 .harness/evidence_ledger.py resolve-locator --schema deployment-success-v1 \
             --lane production --run-id "$TARGET_RUN_ID" --artifact-id "$TARGET_ARTIFACT_ID" \
-            --artifact-name "$TARGET_ARTIFACT_NAME" --output .harness/target-evidence.json
+            --artifact-name "$TARGET_ARTIFACT_NAME" --historical \
+            --output .harness/target-evidence.json
           python3 .harness/evidence_ledger.py derive-rollback --evidence .harness/target-evidence.json >> "$GITHUB_OUTPUT"
       - name: Deploy revision derived from verified target evidence
         id: deploy
@@ -63,7 +72,13 @@ jobs:
           COOLIFY_DEPLOY_TOKEN_IP_ALLOWLISTED: ${{ vars.COOLIFY_DEPLOY_TOKEN_IP_ALLOWLISTED }}
         run: |
           python3 .harness/deploy_exact_revision.py --resource-uuid "$COOLIFY_RESOURCE_UUID" \
-            --revision "$ROLLBACK_REVISION" --health-url "$COOLIFY_HEALTH_URL"
+            --revision "$ROLLBACK_REVISION" --health-url "$COOLIFY_HEALTH_URL" \
+            --rollback-evidence .harness/current-head.json \
+            --record-output .harness/deployment-evidence/current.json
+      - name: Build rollback successor evidence
+        env:
+          ROLLBACK_REVISION: ${{ steps.resolve.outputs.revision }}
+        run: |
           python3 .harness/evidence_ledger.py successor --lane production \
             --predecessor .harness/current-head.json --deploy-record .harness/deployment-evidence/current.json \
             --target-revision "$ROLLBACK_REVISION" --output evidence.json
@@ -80,4 +95,19 @@ jobs:
           retention-days: 90
       - name: Compensate to verified predecessor
         if: failure() && steps.deploy.outcome == 'success'
-        run: python3 .harness/evidence_ledger.py compensate --predecessor .harness/current-head.json
+        env:
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          COOLIFY_HEALTH_URL: ${{ vars.COOLIFY_HEALTH_URL }}
+          COOLIFY_PIN_TOKEN: ${{ secrets.COOLIFY_PIN_TOKEN }}
+          COOLIFY_PIN_TOKEN_SCOPES: ${{ vars.COOLIFY_PIN_TOKEN_SCOPES }}
+          COOLIFY_PIN_TOKEN_EXPIRES_AT: ${{ vars.COOLIFY_PIN_TOKEN_EXPIRES_AT }}
+          COOLIFY_PIN_TOKEN_IP_ALLOWLISTED: ${{ vars.COOLIFY_PIN_TOKEN_IP_ALLOWLISTED }}
+          COOLIFY_DEPLOY_TOKEN: ${{ secrets.COOLIFY_DEPLOY_TOKEN }}
+          COOLIFY_DEPLOY_TOKEN_SCOPES: ${{ vars.COOLIFY_DEPLOY_TOKEN_SCOPES }}
+          COOLIFY_DEPLOY_TOKEN_EXPIRES_AT: ${{ vars.COOLIFY_DEPLOY_TOKEN_EXPIRES_AT }}
+          COOLIFY_DEPLOY_TOKEN_IP_ALLOWLISTED: ${{ vars.COOLIFY_DEPLOY_TOKEN_IP_ALLOWLISTED }}
+        run: |
+          python3 .harness/evidence_ledger.py compensate \
+            --predecessor .harness/current-head.json \
+            --deploy-record .harness/deployment-evidence/current.json \
+            --health-url "$COOLIFY_HEALTH_URL"

@@ -431,7 +431,14 @@ class SkillScriptsTest(unittest.TestCase):
                 compiled = module.compile_workflows(payload, assets)
                 self.assertEqual(
                     set(compiled),
-                    {"ci.yml", "coolify-deploy.yml", "backend-prepare.yml", "coolify-rollback.yml", "bootstrap-deployment-evidence.yml"},
+                    {
+                        "ci.yml",
+                        "coolify-deploy.yml",
+                        "backend-prepare.yml",
+                        "coolify-rollback.yml",
+                        "bootstrap-deployment-evidence.yml",
+                        "evidence-retention-checkpoint.yml",
+                    },
                 )
                 self.assertEqual(
                     set(validator.parse_jobs(compiled["coolify-deploy.yml"])),
@@ -450,8 +457,15 @@ class SkillScriptsTest(unittest.TestCase):
                 self.assertIn("environment: production", compiled["coolify-rollback.yml"])
                 self.assertNotIn("  push:", compiled["backend-prepare.yml"])
                 self.assertNotIn("  push:", compiled["coolify-rollback.yml"])
-                self.assertIn("permissions:\n  contents: read", compiled["backend-prepare.yml"])
-                self.assertIn("permissions:\n  contents: read", compiled["coolify-rollback.yml"])
+                expected_permissions = (
+                    "permissions:\n"
+                    "  actions: read\n"
+                    "  attestations: write\n"
+                    "  contents: read\n"
+                    "  id-token: write"
+                )
+                self.assertIn(expected_permissions, compiled["backend-prepare.yml"])
+                self.assertIn(expected_permissions, compiled["coolify-rollback.yml"])
 
     def test_workflow_yaml_parser_fallback_stays_fail_closed(self):
         validator = load_module(
@@ -531,6 +545,7 @@ class SkillScriptsTest(unittest.TestCase):
         ci_path = root / ".github" / "workflows" / "ci.yml"
         backend_prepare_path = root / ".github" / "workflows" / "backend-prepare.yml"
         rollback_path = root / ".github" / "workflows" / "coolify-rollback.yml"
+        checkpoint_path = root / ".github" / "workflows" / "evidence-retention-checkpoint.yml"
         before = {
             config_path: config_path.read_bytes(),
             workflow_path: workflow_path.read_bytes(),
@@ -557,6 +572,8 @@ class SkillScriptsTest(unittest.TestCase):
                 ".github/workflows/backend-prepare.yml",
                 ".github/workflows/coolify-rollback.yml",
                 ".github/workflows/bootstrap-deployment-evidence.yml",
+                ".github/workflows/evidence-retention-checkpoint.yml",
+                ".harness/evidence_ledger.py",
             },
         )
         for path, content in before.items():
@@ -584,6 +601,11 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertEqual(workflow_path.read_text(), compiled["coolify-deploy.yml"])
         self.assertEqual(backend_prepare_path.read_text(), compiled["backend-prepare.yml"])
         self.assertEqual(rollback_path.read_text(), compiled["coolify-rollback.yml"])
+        self.assertEqual(checkpoint_path.read_text(), compiled["evidence-retention-checkpoint.yml"])
+        self.assertEqual(
+            (root / ".harness" / "evidence_ledger.py").read_bytes(),
+            (ROOT / "skills/setup-coolify-cicd/evidence_ledger.py").read_bytes(),
+        )
 
     def test_harness_migration_uses_unique_temps_and_refuses_symlink_destinations(self):
         temporary, root = self.fixture()
@@ -987,6 +1009,7 @@ class SkillScriptsTest(unittest.TestCase):
             "harness_io.py",
             "harness_repository_contract.py",
             "workflow_compiler.py",
+            "evidence_ledger.py",
             "scripts/doctor.py",
             "scripts/coolify_reconcile.py",
             "scripts/migrate_harness.py",
@@ -998,6 +1021,8 @@ class SkillScriptsTest(unittest.TestCase):
             "assets/backend-prepare-postgres.yml",
             "assets/backend-prepare-convex.yml",
             "assets/coolify-rollback.yml",
+            "assets/bootstrap-deployment-evidence.yml",
+            "assets/evidence-retention-checkpoint.yml",
             "assets/coolify_client.py",
             "assets/deploy_exact_revision.py",
         ):
@@ -1029,6 +1054,9 @@ class SkillScriptsTest(unittest.TestCase):
         )
         (root / ".harness" / "coolify_client.py").write_text(
             (ROOT / "skills/setup-coolify-cicd/assets/coolify_client.py").read_text()
+        )
+        (root / ".harness" / "evidence_ledger.py").write_text(
+            (ROOT / "skills/setup-coolify-cicd/evidence_ledger.py").read_text()
         )
         (root / "package.json").write_text('{"dependencies":{"@nestjs/core":"1","pg":"1"}}')
         (root / "package-lock.json").write_text("{}")
@@ -1366,10 +1394,11 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertIn("must declare executable steps", noop.stdout)
 
         bypass = valid.replace(
-            "if: github.ref_name == 'stage'",
-            "if: always() && github.ref_name == 'stage'",
+            "if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'stage' && github.event.workflow_run.conclusion == 'success'",
+            "if: always() && github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'stage' && github.event.workflow_run.conclusion == 'success'",
             1,
         ).replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    continue-on-error: true", 1)
+        self.assertNotEqual(bypass, valid)
         workflow_path.write_text(bypass)
         rejected = run_script("skills/setup-coolify-cicd/scripts/validate_workflow.py", root)
         self.assertEqual(rejected.returncode, 1)
@@ -1406,6 +1435,12 @@ class SkillScriptsTest(unittest.TestCase):
                 "  push:\n    branches: [main]\n  workflow_dispatch:",
                 "rollback workflow differs from exact canonical compilation",
             ),
+            (
+                "evidence-retention-checkpoint.yml",
+                "  cancel-in-progress: false",
+                "  cancel-in-progress: true",
+                "retention checkpoint workflow differs from exact canonical compilation",
+            ),
         )
         for name, source, replacement, message in cases:
             with self.subTest(name=name):
@@ -1417,13 +1452,93 @@ class SkillScriptsTest(unittest.TestCase):
                 self.assertIn(message, result.stdout)
                 path.write_text(original)
 
+    def test_workflow_validator_rejects_backend_preparation_from_tag_ref(self):
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        path = root / ".github" / "workflows" / "backend-prepare.yml"
+        original = path.read_text()
+        unsafe = original.replace(
+            "if: github.ref_name == 'main'",
+            "if: github.ref_type == 'tag'",
+            1,
+        )
+        self.assertNotEqual(unsafe, original)
+        path.write_text(unsafe)
+        result = run_script("skills/setup-coolify-cicd/scripts/validate_workflow.py", root)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("backend preparation jobs must be main-only", result.stdout)
+
+    def test_workflow_validator_rejects_unscrubbed_backend_receipt_runtime(self):
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        path = root / ".github" / "workflows" / "backend-prepare.yml"
+        original = path.read_text()
+        unsafe = original.replace(
+            "/usr/bin/env -i PATH=/usr/bin:/bin",
+            "env",
+            1,
+        )
+        self.assertNotEqual(unsafe, original)
+        path.write_text(unsafe)
+        result = run_script("skills/setup-coolify-cicd/scripts/validate_workflow.py", root)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("scrubbed immutable trusted Git object", result.stdout)
+
+    def test_workflow_validator_rejects_bootstrap_dispatch_resource_override(self):
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        path = root / ".github" / "workflows" / "bootstrap-deployment-evidence.yml"
+        original = path.read_text()
+        unsafe = original.replace(
+            "RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}",
+            "RESOURCE_UUID: ${{ inputs.resource_uuid }}",
+            1,
+        )
+        self.assertNotEqual(unsafe, original)
+        path.write_text(unsafe)
+        result = run_script("skills/setup-coolify-cicd/scripts/validate_workflow.py", root)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("bootstrap must bind resource UUID and health URL only", result.stdout)
+
+    def test_workflow_validator_rejects_post_compensation_restoration_publication(self):
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        path = root / ".github" / "workflows" / "coolify-deploy.yml"
+        original = path.read_text()
+        before_production, production = original.rsplit(
+            "      - name: Compensate to verified predecessor",
+            1,
+        )
+        unsafe = before_production + "      - name: restoration-successor after compensation" + production
+        self.assertNotEqual(unsafe, original)
+        path.write_text(unsafe)
+        result = run_script("skills/setup-coolify-cicd/scripts/validate_workflow.py", root)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("failed runs must not publish authority after compensation", result.stdout)
+
+    def test_workflow_validator_rejects_tag_checkpoint_dispatch(self):
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        path = root / ".github" / "workflows" / "evidence-retention-checkpoint.yml"
+        original = path.read_text()
+        unsafe = original.replace(
+            "if: github.ref_name == 'main'",
+            "if: github.ref_type == 'tag'",
+            1,
+        )
+        self.assertNotEqual(unsafe, original)
+        path.write_text(unsafe)
+        result = run_script("skills/setup-coolify-cicd/scripts/validate_workflow.py", root)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("retention checkpoint jobs must be main-only", result.stdout)
+
     def test_workflow_validator_rejects_verify_permission_override(self):
         temporary, root = self.fixture()
         self.addCleanup(temporary.cleanup)
         workflow_path = root / ".github" / "workflows" / "coolify-deploy.yml"
         workflow_path.write_text(workflow_path.read_text().replace(
-            "  verify:\n    uses: ./.github/workflows/ci.yml",
-            "  verify:\n    permissions: write-all\n    uses: ./.github/workflows/ci.yml",
+            "  verify:\n    if: github.event_name == 'workflow_dispatch' && github.ref_name == 'main'\n    uses: ./.github/workflows/ci.yml",
+            "  verify:\n    if: github.event_name == 'workflow_dispatch' && github.ref_name == 'main'\n    permissions: write-all\n    uses: ./.github/workflows/ci.yml",
         ))
         result = run_script("skills/setup-coolify-cicd/scripts/validate_workflow.py", root)
         self.assertEqual(result.returncode, 1)
@@ -1435,11 +1550,11 @@ class SkillScriptsTest(unittest.TestCase):
         workflow_path = root / ".github" / "workflows" / "coolify-deploy.yml"
         valid = workflow_path.read_text()
         mutations = (
-            valid.replace('      run: "echo migrate-stage"', '      run: "echo migrate-stage"\n      if: ${{ false }}', 1),
-            valid.replace('      run: "echo migrate-stage"', '      run: "echo migrate-stage"\n      shell: echo {0}', 1),
+            valid.replace('      - run: "echo migrate-stage"', '      - run: "echo migrate-stage"\n        if: ${{ false }}', 1),
+            valid.replace('      - run: "echo migrate-stage"', '      - run: "echo migrate-stage"\n        shell: echo {0}', 1),
             valid.replace(
-                "    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
-                "    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\n      with:\n        repository: attacker/evil",
+                "      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+                "      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\n        with:\n          repository: attacker/evil",
                 1,
             ),
             valid.replace(
@@ -1450,6 +1565,7 @@ class SkillScriptsTest(unittest.TestCase):
         )
         for unsafe in mutations:
             with self.subTest(unsafe=unsafe):
+                self.assertNotEqual(unsafe, valid)
                 workflow_path.write_text(unsafe)
                 result = run_script("skills/setup-coolify-cicd/scripts/validate_workflow.py", root)
                 self.assertEqual(result.returncode, 1, result.stdout)
@@ -1485,6 +1601,15 @@ class SkillScriptsTest(unittest.TestCase):
         result = run_script("skills/setup-coolify-cicd/scripts/validate_workflow.py", root)
         self.assertEqual(result.returncode, 1)
         self.assertIn("exact revision helper differs", result.stdout)
+
+    def test_workflow_validator_rejects_modified_evidence_ledger(self):
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        ledger = root / ".harness" / "evidence_ledger.py"
+        ledger.write_text(ledger.read_text() + "\n# drift\n")
+        result = run_script("skills/setup-coolify-cicd/scripts/validate_workflow.py", root)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("evidence ledger differs from the reviewed template", result.stdout)
 
     def test_ci_validator_rejects_silent_skip_or_command_drift(self):
         temporary, root = self.fixture()
@@ -1944,8 +2069,9 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertEqual(workflow.count("group: coolify-resource-${{ vars.COOLIFY_RESOURCE_UUID }}"), 2)
         self.assertIn('--revision "$GITHUB_SHA"', workflow)
         self.assertNotIn('/api/v1/deploy"', workflow)
-        self.assertEqual(workflow.count("secrets.COOLIFY_PIN_TOKEN"), 2)
-        self.assertEqual(workflow.count("secrets.COOLIFY_DEPLOY_TOKEN"), 2)
+        self.assertEqual(workflow.count("secrets.COOLIFY_PIN_TOKEN"), 4)
+        self.assertEqual(workflow.count("secrets.COOLIFY_DEPLOY_TOKEN"), 4)
+        self.assertEqual(workflow.count("secrets.COOLIFY_VERIFY_TOKEN"), 2)
         self.assertNotIn("secrets.COOLIFY_TOKEN", workflow)
         self.assertIn("github.event_name == 'workflow_dispatch'", workflow)
         self.assertIn("${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}:${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}", compose)
@@ -1969,6 +2095,8 @@ class SkillScriptsTest(unittest.TestCase):
             ROOT / "skills/setup-coolify-cicd/assets/backend-prepare-postgres.yml",
             ROOT / "skills/setup-coolify-cicd/assets/backend-prepare-convex.yml",
             ROOT / "skills/setup-coolify-cicd/assets/coolify-rollback.yml",
+            ROOT / "skills/setup-coolify-cicd/assets/bootstrap-deployment-evidence.yml",
+            ROOT / "skills/setup-coolify-cicd/assets/evidence-retention-checkpoint.yml",
             ROOT / ".github/workflows/ci.yml",
             ROOT / ".github/workflows/publish-images.yml",
         ]
