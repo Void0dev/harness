@@ -1,4 +1,9 @@
-FROM node:22-bookworm
+FROM node:22-bookworm@sha256:5647be709086c696ff32edaaf1c70cd26d1da6ab2b39c32f3c7b4c4a31957e37
+
+ARG SOURCE_REPOSITORY
+ARG SOURCE_COMMIT
+LABEL org.opencontainers.image.source=$SOURCE_REPOSITORY \
+      org.opencontainers.image.revision=$SOURCE_COMMIT
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git curl jq ca-certificates docker-cli openssh-client gosu \

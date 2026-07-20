@@ -1,11 +1,51 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "project": {
     "slug": "example-service",
     "github": "owner/repository",
-    "stack": "nest-postgres",
     "serviceRoot": "."
   },
+  "capabilities": [
+    {
+      "id": "application",
+      "kind": "coolify.application",
+      "root": ".",
+      "detection": { "deploymentContracts": ["Dockerfile"] },
+      "commands": {},
+      "bindings": {
+        "stage": { "environment": "stage", "resourceRef": null, "domain": null, "environmentVariableRefs": {} },
+        "production": { "environment": "production", "resourceRef": null, "domain": null, "environmentVariableRefs": {} }
+      },
+      "workflow": { "stageGate": "deploy-stage", "productionGate": "deploy-production" },
+      "evidence": { "claims": ["repo-ready", "stage-healthy", "production-configured"] }
+    },
+    {
+      "id": "postgres",
+      "kind": "coolify.postgresql",
+      "root": ".",
+      "detection": { "packageMarkers": ["pg", "postgres", "typeorm", "prisma"] },
+      "commands": { "check": "npm run migration:check", "deployStage": "npm run migration:stage", "deployProduction": "npm run migration:production" },
+      "bindings": {
+        "stage": { "environment": "stage", "provider": "coolify-postgresql", "resourceRef": null, "credentialRef": "STAGE_DATABASE_URL", "applicationVariable": "DATABASE_URL", "workflowSecretName": "DATABASE_URL" },
+        "production": { "environment": "production", "provider": "coolify-postgresql", "resourceRef": null, "credentialRef": "PRODUCTION_DATABASE_URL", "applicationVariable": "DATABASE_URL", "workflowSecretName": "DATABASE_URL" }
+      },
+      "workflow": { "stageGate": "migration-stage", "productionGate": "migration-production" },
+      "evidence": { "claims": ["postgres-stage-bound", "postgres-production-bound"] }
+    },
+    {
+      "id": "convex",
+      "kind": "convex.deployment",
+      "root": ".",
+      "detection": { "packageMarkers": ["convex"], "directories": ["convex"] },
+      "commands": { "check": "npm run convex:check", "deployStage": "npm run convex:deploy:stage", "deployProduction": "npm run convex:deploy:production" },
+      "bindings": {
+        "stage": { "environment": "stage", "provider": "convex", "projectRef": null, "resourceRef": null, "deploymentType": "permanent", "deployKeyRef": "STAGE_CONVEX_DEPLOY_KEY", "workflowSecretName": "CONVEX_DEPLOY_KEY" },
+        "production": { "environment": "production", "provider": "convex", "projectRef": null, "resourceRef": null, "deploymentType": "permanent", "deployKeyRef": "PRODUCTION_CONVEX_DEPLOY_KEY", "workflowSecretName": "CONVEX_DEPLOY_KEY" }
+      },
+      "workflow": { "stageGate": "backend-stage", "productionGate": "backend-production" },
+      "evidence": { "claims": ["convex-stage-bound", "convex-production-bound"] }
+    }
+  ],
   "branches": {
     "stage": "stage",
     "production": "main",
@@ -14,12 +54,10 @@
   "commands": {
     "install": "npm ci",
     "test": "npm test",
+    "lint": "npm run lint",
     "typecheck": "npm run typecheck",
     "build": "npm run build",
-    "smoke": "npm run smoke",
-    "migrateCheck": "npm run migration:check",
-    "migrateStage": "npm run migration:stage",
-    "migrateProduction": "npm run migration:production"
+    "smoke": "npm run smoke"
   },
   "runtime": {
     "port": 3000,
@@ -29,25 +67,57 @@
     "sourceVisibility": "private",
     "buildPack": "dockerfile",
     "dockerfile": "Dockerfile",
+    "minimumCoolifyVersion": "4.1.2",
+    "revisionStrategy": "git-commit-sha",
     "gateRunners": { "stage": "ubuntu-latest", "production": "ubuntu-latest" },
     "requiredEnvironmentVariables": ["DATABASE_URL"],
     "distinctEnvironmentVariables": ["DATABASE_URL"]
+  },
+  "deliveryPolicy": {
+    "production": {
+      "githubEnvironment": "production",
+      "manualDispatchOnly": true,
+      "requiredReviewers": 1,
+      "preventSelfReview": true
+    },
+    "rollback": {
+      "strategy": "redeploy-previous-verified-revision",
+      "requiresProductionApproval": true,
+      "recordPreviousRevision": true
+    },
+    "backendProduction": {
+      "mode": "prepared-expand-only-evidence",
+      "requiresSeparateProtectedApproval": true,
+      "contractStepAfterApplication": true
+    }
   },
   "coolify": {
     "projectUuid": null,
     "serverUuid": null,
     "githubAppUuid": null,
-    "stage": { "environment": "stage", "applicationUuid": null, "domain": null, "dataBackendProvider": null, "dataBackendRef": null, "environmentVariableRefs": { "DATABASE_URL": "STAGE_DATABASE_URL" } },
-    "production": { "environment": "production", "applicationUuid": null, "domain": null, "dataBackendProvider": null, "dataBackendRef": null, "environmentVariableRefs": { "DATABASE_URL": "PRODUCTION_DATABASE_URL" } }
+    "apiPolicy": {
+      "httpsRequired": true,
+      "redirects": "deny",
+      "ambientProxy": false,
+      "timeoutSeconds": 30,
+      "maxResponseBytes": 1048576,
+      "tokenMaxTtlHours": 24,
+      "ipAllowlistRequired": true,
+      "splitPinAndDeployCredentials": true
+    }
   },
   "issueAgent": {
     "applicationUuid": null,
     "baseBranch": "stage",
     "harnessImage": null,
     "sandboxImage": null,
+    "imageSourceRepository": "https://github.com/Void0dev/harness",
+    "imageSourceCommit": null,
+    "imagePublicationRunId": null,
     "serverUuid": null,
     "dataDir": null,
     "dedicatedAutomationHost": true,
+    "sandboxEngineMode": "rootless-local",
     "maxConcurrentRuns": 1,
     "replicas": 1
   },

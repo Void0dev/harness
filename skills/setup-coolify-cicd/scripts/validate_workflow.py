@@ -7,19 +7,31 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from harness_config import RUNNER_LABEL, capability_kinds, compile_workflows, load_config, single_capability  # noqa: E402
+
 
 JOB_LINE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 FIELD_LINE = re.compile(r"^    ([A-Za-z0-9_-]+):\s*(.*?)\s*$")
 RUN_LINE = re.compile(r"^(\s+)(?:-\s+)?run:\s*(.*?)\s*$")
 STEP_USES_LINE = re.compile(r"^\s{6,}(?:-\s+)?uses:\s*(.*?)\s*$")
 SECRET_REFERENCE = re.compile(r"secrets\.([A-Za-z0-9_]+)")
+REMOTE_ACTION_REFERENCE = re.compile(r"uses:\s+([^\s]+)")
+FULL_ACTION_PIN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
+CHECKOUT_ACTION = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+SETUP_NODE_ACTION = "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020"
 TOP_LINE = re.compile(r"^([A-Za-z0-9_-]+):")
-RUNNER_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def scalar(value: str) -> str:
     value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        return decoded if isinstance(decoded, str) else value
+    if len(value) >= 2 and value[0] == value[-1] == "'":
         return value[1:-1]
     return value
 
@@ -50,6 +62,15 @@ def exact_top_block(text: str, name: str) -> list[str] | None:
         if line.strip() and not line.lstrip().startswith("#"):
             result.append(line.rstrip())
     return result
+
+
+def direct_top_block_keys(text: str, name: str) -> list[str]:
+    block = exact_top_block(text, name) or []
+    keys = []
+    for line in block:
+        if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
+            keys.append(line.strip()[:-1])
+    return keys
 
 
 def parse_jobs(text: str) -> dict[str, dict[str, object]]:
@@ -154,14 +175,6 @@ def yaml_syntax_error(text: str) -> str | None:
     return None
 
 
-def fragment_jobs(path: pathlib.Path, replacements: dict[str, str]) -> dict[str, dict[str, object]]:
-    text = path.read_text()
-    for source, target in replacements.items():
-        text = text.replace(source, target)
-    indented = "\n".join(f"  {line}" if line else line for line in text.splitlines())
-    return parse_jobs(f"jobs:\n{indented}\n")
-
-
 def validate_job_controls(job_name: str, job: dict[str, object], expected_condition: str, errors: list[str]):
     if condition(str(job.get("if", ""))) != expected_condition:
         errors.append(f"{job_name} must use the exact fail-closed branch/event condition")
@@ -176,8 +189,11 @@ def validate_job_controls(job_name: str, job: dict[str, object], expected_condit
 
 
 def validate(repo: pathlib.Path) -> dict:
-    config = json.loads((repo / ".harness" / "config.json").read_text())
     workflow_path = repo / ".github" / "workflows" / "coolify-deploy.yml"
+    try:
+        _, config = load_config(repo)
+    except (ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+        return {"verified": False, "workflow": str(workflow_path), "capabilities": [], "jobs": [], "errors": [str(exc)]}
     if not workflow_path.exists():
         return {"verified": False, "workflow": str(workflow_path), "errors": ["missing coolify-deploy.yml"]}
     text = workflow_path.read_text()
@@ -209,14 +225,22 @@ def validate(repo: pathlib.Path) -> dict:
         errors.append("workflow top-level keys must be exactly name, on, permissions, concurrency, and jobs")
 
     on_block = exact_top_block(text, "on")
-    expected_on = {"  push:", "    branches: [stage]", "  workflow_dispatch:"}
-    if on_block is None or set(on_block) != expected_on or len(on_block) != len(expected_on):
-        errors.append("workflow triggers must be exactly stage push plus workflow_dispatch")
+    if direct_top_block_keys(text, "on") != ["workflow_run", "workflow_dispatch"]:
+        errors.append("workflow triggers must be exactly CI workflow_run plus workflow_dispatch")
     permissions_block = exact_top_block(text, "permissions")
-    if permissions_block != ["  contents: read"]:
-        errors.append("workflow permissions must be exactly contents: read")
+    expected_permissions = [
+        "  actions: read",
+        "  attestations: write",
+        "  contents: read",
+        "  id-token: write",
+    ]
+    if permissions_block != expected_permissions:
+        errors.append("workflow permissions must be exact read plus attestation publication scopes")
     concurrency_block = exact_top_block(text, "concurrency")
-    if concurrency_block != ["  group: coolify-${{ github.ref_name }}", "  cancel-in-progress: false"]:
+    if concurrency_block != [
+        "  group: coolify-${{ github.workflow }}-${{ github.event_name }}",
+        "  cancel-in-progress: false",
+    ]:
         errors.append("workflow concurrency contract is invalid")
 
     required_jobs = ("verify", "deploy-stage", "deploy-production")
@@ -227,10 +251,9 @@ def validate(repo: pathlib.Path) -> dict:
     if verify and verify.get("uses") != "./.github/workflows/ci.yml":
         errors.append("verify job must call ./.github/workflows/ci.yml")
 
-    stack = config.get("project", {}).get("stack")
-    supported_stacks = {"nest-postgres", "convex", "hybrid"}
-    if stack not in supported_stacks:
-        errors.append("project.stack must be nest-postgres, convex, or hybrid")
+    kinds = capability_kinds(config)
+    postgres = single_capability(config, "coolify.postgresql") if "coolify.postgresql" in kinds else None
+    convex = single_capability(config, "convex.deployment") if "convex.deployment" in kinds else None
     commands = config.get("commands", {})
     install_command = commands.get("install")
     gate_runners = config.get("deployment", {}).get("gateRunners", {
@@ -243,48 +266,118 @@ def validate(repo: pathlib.Path) -> dict:
     gates = {"stage": [], "production": []}
     gate_commands = {}
     gate_secrets = {}
-    if stack in ("nest-postgres", "hybrid"):
-        gates["stage"].append("migration-stage")
-        gates["production"].append("migration-production")
+    if postgres:
+        postgres_workflow = postgres["workflow"]
+        gates["stage"].append(postgres_workflow.get("stageGate"))
+        gates["production"].append(postgres_workflow.get("productionGate"))
         gate_commands.update({
-            "migration-stage": commands.get("migrateStage"),
-            "migration-production": commands.get("migrateProduction"),
+            postgres_workflow.get("stageGate"): postgres["commands"].get("deployStage"),
+            postgres_workflow.get("productionGate"): postgres["commands"].get("deployProduction"),
         })
-        gate_secrets.update({"migration-stage": "DATABASE_URL", "migration-production": "DATABASE_URL"})
-    if stack in ("convex", "hybrid"):
-        gates["stage"].append("backend-stage")
-        gates["production"].append("backend-production")
+        gate_secrets.update({
+            postgres_workflow.get("stageGate"): postgres["bindings"]["stage"].get("workflowSecretName"),
+            postgres_workflow.get("productionGate"): postgres["bindings"]["production"].get("workflowSecretName"),
+        })
+    if convex:
+        convex_workflow = convex["workflow"]
+        gates["stage"].append(convex_workflow.get("stageGate"))
+        gates["production"].append(convex_workflow.get("productionGate"))
         gate_commands.update({
-            "backend-stage": commands.get("deployStage"),
-            "backend-production": commands.get("deployProduction"),
+            convex_workflow.get("stageGate"): convex["commands"].get("deployStage"),
+            convex_workflow.get("productionGate"): convex["commands"].get("deployProduction"),
         })
-        gate_secrets.update({"backend-stage": "CONVEX_DEPLOY_KEY", "backend-production": "CONVEX_DEPLOY_KEY"})
+        gate_secrets.update({
+            convex_workflow.get("stageGate"): convex["bindings"]["stage"].get("workflowSecretName"),
+            convex_workflow.get("productionGate"): convex["bindings"]["production"].get("workflowSecretName"),
+        })
 
     expected_jobs = {"verify", "deploy-stage", "deploy-production", *gates["stage"], *gates["production"]}
     if set(jobs) != expected_jobs:
         errors.append("workflow contains missing or unexpected jobs")
 
     assets = pathlib.Path(__file__).resolve().parents[1] / "assets"
+    compiled_workflows = compile_workflows(config, assets)
+    expected_delivery = compiled_workflows["coolify-deploy.yml"]
+    if text != expected_delivery:
+        errors.append("delivery workflow differs from the exact canonical compilation")
     base_jobs = parse_jobs((assets / "coolify-deploy.yml").read_text())
+    ci_path = repo / ".github" / "workflows" / "ci.yml"
+    expected_ci = compiled_workflows["ci.yml"]
+    if not ci_path.is_file() or ci_path.read_text() != expected_ci:
+        errors.append("CI workflow differs from exact configured gates")
+    auxiliary_texts = []
+    auxiliary_specs = (
+        (
+            "backend-prepare.yml",
+            "backend preparation workflow differs from exact canonical compilation",
+        ),
+        (
+            "coolify-rollback.yml",
+            "rollback workflow differs from exact canonical compilation",
+        ),
+        (
+            "bootstrap-deployment-evidence.yml",
+            "bootstrap workflow differs from exact canonical compilation",
+        ),
+    )
+    for name, mismatch_error in auxiliary_specs:
+        path = repo / ".github" / "workflows" / name
+        expected = compiled_workflows[name]
+        if not path.is_file():
+            errors.append(f"missing canonical protected workflow: {name}")
+            continue
+        auxiliary_text = path.read_text()
+        auxiliary_texts.append(auxiliary_text)
+        if auxiliary_text != expected:
+            errors.append(mismatch_error)
+        auxiliary_syntax_error = yaml_syntax_error(auxiliary_text)
+        if auxiliary_syntax_error:
+            errors.append(f"{name}: {auxiliary_syntax_error}")
+        if direct_top_block_keys(auxiliary_text, "on") != ["workflow_dispatch"]:
+            errors.append(f"{name} trigger must be exactly workflow_dispatch")
+        if exact_top_block(auxiliary_text, "permissions") != expected_permissions:
+            errors.append(f"{name} permissions must be exact read plus attestation publication scopes")
+        try:
+            auxiliary_jobs = parse_jobs(auxiliary_text)
+        except ValueError as exc:
+            auxiliary_jobs = {}
+            errors.append(f"{name}: {exc}")
+        expected_environment = "${{ inputs.lane }}" if name == "bootstrap-deployment-evidence.yml" else "production"
+        if not auxiliary_jobs or any(job.get("environment") != expected_environment for job in auxiliary_jobs.values()):
+            errors.append(f"{name} jobs must use the exact protected environment contract")
+
+    for workflow_text in (
+        text,
+        ci_path.read_text() if ci_path.is_file() else "",
+        *auxiliary_texts,
+    ):
+        for reference in REMOTE_ACTION_REFERENCE.findall(workflow_text):
+            if not reference.startswith("./") and not FULL_ACTION_PIN.fullmatch(reference):
+                errors.append(f"remote action is not pinned to a full commit SHA: {reference}")
+    installed_helper = repo / ".harness" / "deploy_exact_revision.py"
+    reviewed_helper = assets / "deploy_exact_revision.py"
+    if not installed_helper.is_file():
+        errors.append("missing reviewed .harness/deploy_exact_revision.py")
+    elif installed_helper.read_bytes() != reviewed_helper.read_bytes():
+        errors.append("exact revision helper differs from the reviewed template")
+    installed_client = repo / ".harness" / "coolify_client.py"
+    reviewed_client = assets / "coolify_client.py"
+    if not installed_client.is_file():
+        errors.append("missing reviewed .harness/coolify_client.py")
+    elif installed_client.read_bytes() != reviewed_client.read_bytes():
+        errors.append("Coolify client differs from the reviewed template")
     if verify and normalized_job_lines(verify) != normalized_job_lines(base_jobs["verify"]):
         errors.append("verify differs from the reviewed reusable-workflow template")
 
-    expected_gate_jobs = {}
-    if stack in ("nest-postgres", "hybrid"):
-        expected_gate_jobs.update(fragment_jobs(assets / "nest-migration-jobs.yml", {
-            "npm ci": install_command,
-            "__HARNESS_MIGRATE_STAGE__": commands.get("migrateStage"),
-            "__HARNESS_MIGRATE_PRODUCTION__": commands.get("migrateProduction"),
-        }))
-    if stack in ("convex", "hybrid"):
-        expected_gate_jobs.update(fragment_jobs(assets / "convex-delivery-jobs.yml", {
-            "npm ci": install_command,
-            "__HARNESS_CONVEX_DEPLOY_STAGE__": commands.get("deployStage"),
-            "__HARNESS_CONVEX_DEPLOY_PRODUCTION__": commands.get("deployProduction"),
-        }))
+    compiled_jobs = parse_jobs(expected_delivery)
+    expected_gate_jobs = {
+        job_name: job
+        for job_name, job in compiled_jobs.items()
+        if job_name not in base_jobs
+    }
 
     conditions = {
-        "stage": "github.ref_name == 'stage'",
+        "stage": "github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'stage' && github.event.workflow_run.conclusion == 'success'",
         "production": "github.event_name == 'workflow_dispatch' && github.ref_name == 'main'",
     }
     for lane, gate_jobs in gates.items():
@@ -303,18 +396,26 @@ def validate(repo: pathlib.Path) -> dict:
                 errors.append(f"{job_name} must depend on verify")
             if job.get("environment") != lane:
                 errors.append(f"{job_name} must use environment: {lane}")
-            expected_runs = [install_command, gate_commands.get(job_name)]
+            expected_gate = expected_gate_jobs.get(job_name)
+            expected_runs = (
+                expected_gate.get("_scalar_runs", []) if lane == "production" and expected_gate
+                else [install_command, gate_commands.get(job_name)]
+            )
             if not all(expected_runs) or job.get("_scalar_runs") != expected_runs:
-                errors.append(f"{job_name} must run exactly commands.install then its configured stack command")
+                if lane == "production":
+                    errors.append(f"{job_name} must validate only canonical prepared backend evidence")
+                else:
+                    errors.append(f"{job_name} must run exactly commands.install then its configured stack command")
             actions = job.get("_step_uses", [])
-            if actions != ["actions/checkout@v4", "actions/setup-node@v4"]:
-                errors.append(f"{job_name} must use only checkout and setup-node actions")
+            expected_actions = [CHECKOUT_ACTION] if lane == "production" else [CHECKOUT_ACTION, SETUP_NODE_ACTION]
+            if actions != expected_actions:
+                errors.append(f"{job_name} uses actions outside the reviewed lane template")
             if job.get("_run_content") != expected_runs:
                 errors.append(f"{job_name} contains an unexpected executable command")
             secret_refs = SECRET_REFERENCE.findall(job_lines(job))
-            if secret_refs != [gate_secrets[job_name]]:
-                errors.append(f"{job_name} must reference only secrets.{gate_secrets[job_name]}")
-            expected_gate = expected_gate_jobs.get(job_name)
+            expected_secrets = [] if lane == "production" else [gate_secrets[job_name]]
+            if secret_refs != expected_secrets:
+                errors.append(f"{job_name} references credentials outside the reviewed lane template")
             if not expected_gate or normalized_job_lines(job, {"runs-on"}) != normalized_job_lines(expected_gate, {"runs-on"}):
                 errors.append(f"{job_name} differs from the reviewed gate template")
 
@@ -322,7 +423,12 @@ def validate(repo: pathlib.Path) -> dict:
         deploy = jobs.get(deploy_name)
         if not deploy:
             continue
-        validate_job_controls(deploy_name, deploy, conditions[lane], errors)
+        deploy_condition = (
+            "github.event_name == 'workflow_dispatch' && github.ref_name == 'main'"
+            if lane == "production"
+            else conditions[lane]
+        )
+        validate_job_controls(deploy_name, deploy, deploy_condition, errors)
         if deploy.get("environment") != lane:
             errors.append(f"{deploy_name} must use environment: {lane}")
         expected_needs = set(gate_jobs or ["verify"])
@@ -330,19 +436,27 @@ def validate(repo: pathlib.Path) -> dict:
         if actual_needs != expected_needs:
             errors.append(f"{deploy_name} dependencies must be exactly: {', '.join(sorted(expected_needs))}")
         run_content = "\n".join(deploy.get("_run_content", []))
-        required_delivery_tokens = ("/api/v1/deploy\"", "/api/v1/deployments/", "GITHUB_SHA", "HEALTH_URL")
+        required_delivery_tokens = (
+            ".harness/deploy_exact_revision.py",
+            ".harness/evidence_ledger.py",
+            "--resource-uuid",
+            "--revision",
+            "--health-url",
+        )
         if not all(token in run_content for token in required_delivery_tokens):
             errors.append(f"{deploy_name} must deploy, poll the immutable commit, and smoke health")
         if normalized_job_lines(deploy, {"needs"}) != normalized_job_lines(base_jobs[deploy_name], {"needs"}):
             errors.append(f"{deploy_name} differs from the reviewed deploy/poll/smoke template")
         secret_refs = SECRET_REFERENCE.findall(job_lines(deploy))
-        if secret_refs != ["COOLIFY_TOKEN"]:
-            errors.append(f"{deploy_name} must reference only secrets.COOLIFY_TOKEN")
+        if secret_refs != ["COOLIFY_PIN_TOKEN", "COOLIFY_DEPLOY_TOKEN"]:
+            errors.append(
+                f"{deploy_name} must reference only the separate pin and deploy Coolify tokens"
+            )
 
     return {
         "verified": not errors,
         "workflow": str(workflow_path),
-        "stack": stack,
+        "capabilities": sorted(kinds),
         "jobs": sorted(jobs),
         "errors": errors,
     }

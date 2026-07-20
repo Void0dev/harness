@@ -8,6 +8,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from harness_config import load_config  # noqa: E402
+
 MAX_RESPONSE_BYTES = 1_000_000
 READ_ONLY_TOOLS = {"health.read", "logs.query", "traces.query", "metrics.query", "deploy.status"}
 
@@ -17,7 +22,14 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def request(opener, url, token, method="GET", body=None):
+def secure_opener():
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        NoRedirect(),
+    )
+
+
+def request_json(opener, url, token, method="GET", body=None):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(
         url, data=data, method=method,
@@ -26,26 +38,63 @@ def request(opener, url, token, method="GET", body=None):
     with opener.open(req, timeout=20) as response:
         if response.status != 200:
             raise ValueError(f"diagnostic endpoint returned HTTP {response.status}, expected 200")
+        content_length = response.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared_length = int(content_length)
+            except ValueError:
+                raise ValueError("diagnostic response has an invalid Content-Length") from None
+            if declared_length < 0 or declared_length > MAX_RESPONSE_BYTES:
+                raise ValueError("diagnostic response exceeded the size limit")
         raw = response.read(MAX_RESPONSE_BYTES + 1)
         if len(raw) > MAX_RESPONSE_BYTES:
             raise ValueError("diagnostic response exceeded the size limit")
-        return json.loads(raw) if raw else {}
+        payload = json.loads(raw) if raw else {}
+        if not isinstance(payload, dict):
+            raise ValueError("diagnostic endpoint must return a JSON object")
+        return payload
 
 
 def validate_endpoints(urls, allowed_origin, allow_http_localhost):
     allowed = urllib.parse.urlsplit(allowed_origin)
+    if not allowed.hostname:
+        raise ValueError("allowed origin must include a host")
+    if allowed.username or allowed.password:
+        raise ValueError("allowed origin must not contain userinfo")
     if allowed.path not in ("", "/") or allowed.query or allowed.fragment:
         raise ValueError("allowed origin must contain only scheme and host")
+    try:
+        allowed.port
+    except ValueError:
+        raise ValueError("allowed origin has an invalid port") from None
     if allowed.scheme != "https":
         local = allowed.hostname in ("127.0.0.1", "localhost", "::1")
         if not (allow_http_localhost and allowed.scheme == "http" and local):
             raise ValueError("diagnostics endpoints must use HTTPS")
     for url in urls:
         parsed = urllib.parse.urlsplit(url)
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("diagnostics endpoint must not contain userinfo, query, or fragment")
+        try:
+            parsed.port
+        except ValueError:
+            raise ValueError("diagnostics endpoint has an invalid port") from None
         if (parsed.scheme, parsed.netloc) != (allowed.scheme, allowed.netloc):
             raise ValueError("all diagnostics endpoints must match the operator-supplied allowed origin")
-        if parsed.username or parsed.password or parsed.fragment:
-            raise ValueError("diagnostics endpoint contains forbidden URL components")
+
+
+def extract_log_items(payload):
+    fields = [field for field in ("items", "logs") if field in payload]
+    if len(fields) != 1:
+        raise ValueError("diagnostic query must return exactly one bounded items or logs list")
+    items = payload[fields[0]]
+    if (
+        not isinstance(items, list)
+        or len(items) > 10
+        or any(not isinstance(item, dict) for item in items)
+    ):
+        raise ValueError("diagnostic query must return exactly one bounded items or logs list")
+    return items
 
 
 def main() -> int:
@@ -59,7 +108,7 @@ def main() -> int:
     parser.add_argument("--allow-http-localhost", action="store_true")
     args = parser.parse_args()
     root = pathlib.Path(args.repo).resolve()
-    config = json.loads((root / ".harness" / "config.json").read_text())
+    _, config = load_config(root)
     binding = config.get("observability", {})
     agent = config.get("productionAgent", {})
     required = ("provider", "service")
@@ -86,19 +135,17 @@ def main() -> int:
     token = os.getenv(args.credential_env)
     if not token:
         raise ValueError(f"missing credential environment variable {args.credential_env}")
-    opener = urllib.request.build_opener(NoRedirect)
-    request(opener, args.health_url, token)
-    logs = request(opener, args.query_url, token, "POST", {
+    opener = secure_opener()
+    request_json(opener, args.health_url, token)
+    logs = request_json(opener, args.query_url, token, "POST", {
         "service": binding["service"], "environment": "production", "sinceMinutes": 15, "limit": 10,
     })
-    items = logs.get("items", logs.get("logs", []))
-    if not isinstance(items, list) or len(items) > 10:
-        raise ValueError("diagnostic query returned an invalid or unbounded result")
+    items = extract_log_items(logs)
     if token in json.dumps(items):
         raise ValueError("diagnostic query returned its own credential")
     denied = []
     for action in ("deploy", "write", "shell", "sql.write"):
-        decision = request(opener, args.policy_check_url, token, "POST", {"action": action})
+        decision = request_json(opener, args.policy_check_url, token, "POST", {"action": action})
         if decision.get("allowed") is not False:
             raise ValueError(f"diagnostic identity did not deny {action}")
         denied.append(action)

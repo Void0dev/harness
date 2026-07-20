@@ -2,17 +2,22 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { ensurePrivateRuntimeDirectory } from "./security.js";
 
 const execFileAsync = promisify(execFile);
 const githubName = /^[A-Za-z0-9_.-]+$/;
 
-export type RepositoryWorkspaceOptions = {
+export type IsolatedExecutionWorkspaceOptions = {
   dataDir: string;
-  owner: string;
-  repo: string;
-  baseBranch: string;
+  issueNumber: number;
   remoteUrl: string;
+  baseBranch: string;
   gitEnv?: NodeJS.ProcessEnv;
+};
+
+export type IsolatedExecutionWorkspace = {
+  workspace: string;
+  baseSha: string;
 };
 
 export function githubRepositoryRemote(owner: string, repo: string) {
@@ -31,61 +36,47 @@ export function githubGitAuthEnv(token: string): NodeJS.ProcessEnv {
   };
 }
 
-export async function prepareRepositoryWorkspace(options: RepositoryWorkspaceOptions) {
-  assertSafeName("owner", options.owner);
-  assertSafeName("repo", options.repo);
+export async function prepareIsolatedExecutionWorkspace(
+  options: IsolatedExecutionWorkspaceOptions,
+): Promise<IsolatedExecutionWorkspace> {
+  if (!Number.isSafeInteger(options.issueNumber) || options.issueNumber <= 0) {
+    throw new Error(`Invalid issue number: ${options.issueNumber}`);
+  }
   assertSafeName("base branch", options.baseBranch);
 
-  const workspaceRoot = path.resolve(options.dataDir, "workspaces");
-  const workspace = path.resolve(workspaceRoot, options.owner, options.repo);
-  if (!workspace.startsWith(`${workspaceRoot}${path.sep}`)) {
-    throw new Error("Resolved repository workspace escapes the workspace root");
-  }
-  const gitDirectory = path.join(workspace, ".git");
-
-  if (!(await exists(gitDirectory))) {
-    await fs.mkdir(path.dirname(workspace), { recursive: true });
-    await git(
-      path.dirname(workspace),
-      options.gitEnv,
-      "clone",
-      "--no-tags",
-      "--single-branch",
-      "--branch",
-      options.baseBranch,
-      options.remoteUrl,
-      workspace,
-    );
-    await configureGitIdentity(workspace, options.gitEnv);
-    return workspace;
-  }
-
-  const currentRemote = await git(workspace, options.gitEnv, "remote", "get-url", "origin");
-  if (currentRemote !== options.remoteUrl) {
-    throw new Error(`Refusing to reuse ${workspace}: origin is ${currentRemote}, expected ${options.remoteUrl}`);
-  }
-
-  await git(workspace, options.gitEnv, "fetch", "--no-tags", "--prune", "origin", options.baseBranch);
-  await git(workspace, options.gitEnv, "checkout", "-B", options.baseBranch, `origin/${options.baseBranch}`);
-  await git(workspace, options.gitEnv, "reset", "--hard", `origin/${options.baseBranch}`);
-  await git(workspace, options.gitEnv, "clean", "-ffd");
-  await configureGitIdentity(workspace, options.gitEnv);
-  return workspace;
+  const runsRoot = path.resolve(options.dataDir, "runs", `issue-${options.issueNumber}`);
+  await ensurePrivateRuntimeDirectory(path.resolve(options.dataDir, "runs"));
+  await ensurePrivateRuntimeDirectory(runsRoot);
+  const workspace = await fs.mkdtemp(path.join(runsRoot, "run-"));
+  await isolatedGit(
+    path.dirname(workspace),
+    options.gitEnv,
+    "clone",
+    "--template=",
+    "--no-local",
+    "--no-hardlinks",
+    "--no-tags",
+    "--single-branch",
+    "--branch",
+    options.baseBranch,
+    options.remoteUrl,
+    workspace,
+  );
+  await isolatedGit(workspace, undefined, "remote", "remove", "origin");
+  await isolatedGit(workspace, undefined, "config", "core.hooksPath", "/dev/null");
+  await isolatedGit(workspace, undefined, "config", "user.name", "Codex Harness");
+  await isolatedGit(workspace, undefined, "config", "user.email", "codex-harness@users.noreply.github.com");
+  const baseSha = await isolatedGit(workspace, undefined, "rev-parse", "HEAD");
+  return { workspace, baseSha };
 }
 
 export async function branchHasCommits(
   workspace: string,
   baseRef: string,
   branch: string,
-  gitEnv?: NodeJS.ProcessEnv,
 ) {
-  const count = await git(workspace, gitEnv, "rev-list", "--count", `${baseRef}..${branch}`);
+  const count = await isolatedGit(workspace, undefined, "rev-list", "--count", `${baseRef}..${branch}`);
   return Number.parseInt(count, 10) > 0;
-}
-
-async function configureGitIdentity(workspace: string, gitEnv: NodeJS.ProcessEnv | undefined) {
-  await git(workspace, gitEnv, "config", "user.name", "Codex Harness");
-  await git(workspace, gitEnv, "config", "user.email", "codex-harness@users.noreply.github.com");
 }
 
 function assertSafeName(label: string, value: string) {
@@ -94,21 +85,42 @@ function assertSafeName(label: string, value: string) {
   }
 }
 
-async function exists(filePath: string) {
-  try {
-    await fs.stat(filePath);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-async function git(cwd: string, gitEnv: NodeJS.ProcessEnv | undefined, ...args: string[]) {
-  const result = await execFileAsync("git", args, {
+async function isolatedGit(cwd: string, gitEnv: NodeJS.ProcessEnv | undefined, ...args: string[]) {
+  const result = await execFileAsync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
     cwd,
-    env: { ...process.env, ...gitEnv },
+    env: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      HOME: "/dev/null",
+      XDG_CONFIG_HOME: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_TERMINAL_PROMPT: "0",
+      LANG: "C",
+      LC_ALL: "C",
+      ...allowlistedGitAuthEnvironment(gitEnv),
+    },
     maxBuffer: 10 * 1024 * 1024,
   });
   return result.stdout.trim();
+}
+
+function allowlistedGitAuthEnvironment(gitEnv: NodeJS.ProcessEnv | undefined) {
+  if (!gitEnv) return {};
+  const count = gitEnv.GIT_CONFIG_COUNT;
+  if (!count || !/^\d+$/.test(count)) {
+    throw new Error("Git auth environment must contain a numeric GIT_CONFIG_COUNT");
+  }
+  const allowed: NodeJS.ProcessEnv = { GIT_CONFIG_COUNT: count };
+  for (let index = 0; index < Number(count); index += 1) {
+    const keyName = `GIT_CONFIG_KEY_${index}`;
+    const valueName = `GIT_CONFIG_VALUE_${index}`;
+    const key = gitEnv[keyName];
+    const value = gitEnv[valueName];
+    if (!key || value === undefined || !key.startsWith("http.https://github.com/")) {
+      throw new Error(`Git auth environment contains a non-allowlisted entry at index ${index}`);
+    }
+    allowed[keyName] = key;
+    allowed[valueName] = value;
+  }
+  return allowed;
 }

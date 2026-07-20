@@ -6,9 +6,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import {
+  prepareIsolatedExecutionWorkspace,
   githubGitAuthEnv,
   githubRepositoryRemote,
-  prepareRepositoryWorkspace,
 } from "../src/repository.js";
 
 const execFileAsync = promisify(execFile);
@@ -26,61 +26,50 @@ test("passes GitHub credentials through a process-local extra header", () => {
   assert.doesNotMatch(env.GIT_CONFIG_VALUE_0 ?? "", /top-secret-token/);
 });
 
-test("rejects workspace path traversal segments", async () => {
-  await assert.rejects(
-    prepareRepositoryWorkspace({
-      dataDir: "/tmp/harness",
-      owner: "..",
-      repo: "service",
-      baseBranch: "stage",
-      remoteUrl: "https://github.com/acme/service.git",
-    }),
-    /Invalid owner/,
-  );
+test("rejects GitHub repository path traversal segments", () => {
+  assert.throws(() => githubRepositoryRemote("..", "service"), /Invalid owner/);
 });
 
-test("clones the configured target repository on its base branch", async (t) => {
+test("creates an execution clone with independent Git metadata and no remote", async (t) => {
   const fixture = await createRemoteFixture();
   t.after(() => fs.rm(fixture.root, { recursive: true, force: true }));
-
-  const workspace = await prepareRepositoryWorkspace({
-    dataDir: path.join(fixture.root, "data"),
-    owner: "acme",
-    repo: "service",
-    baseBranch: "stage",
-    remoteUrl: fixture.remote,
+  const hostileTemplate = path.join(fixture.root, "hostile-template");
+  const hostileHooks = path.join(hostileTemplate, "hooks");
+  const hookSentinel = path.join(fixture.root, "hook-ran");
+  await fs.mkdir(hostileHooks, { recursive: true });
+  await fs.writeFile(
+    path.join(hostileHooks, "post-checkout"),
+    `#!/bin/sh\nprintf compromised > "${hookSentinel}"\n`,
+    { mode: 0o755 },
+  );
+  const previousTemplate = process.env.GIT_TEMPLATE_DIR;
+  process.env.GIT_TEMPLATE_DIR = hostileTemplate;
+  t.after(() => {
+    if (previousTemplate === undefined) delete process.env.GIT_TEMPLATE_DIR;
+    else process.env.GIT_TEMPLATE_DIR = previousTemplate;
   });
 
-  assert.equal(workspace, path.join(fixture.root, "data", "workspaces", "acme", "service"));
-  assert.equal(await git(workspace, "branch", "--show-current"), "stage");
-  assert.equal(await git(workspace, "remote", "get-url", "origin"), fixture.remote);
-  assert.equal(await git(workspace, "config", "user.name"), "Codex Harness");
-  assert.equal(await git(workspace, "config", "user.email"), "codex-harness@users.noreply.github.com");
-  assert.equal(await fs.readFile(path.join(workspace, "version.txt"), "utf8"), "v1\n");
-});
-
-test("refreshes an existing workspace from the remote base branch", async (t) => {
-  const fixture = await createRemoteFixture();
-  t.after(() => fs.rm(fixture.root, { recursive: true, force: true }));
-  const options = {
-    dataDir: path.join(fixture.root, "data"),
-    owner: "acme",
-    repo: "service",
-    baseBranch: "stage",
+  const dataDir = path.join(fixture.root, "data");
+  const runsRoot = path.join(dataDir, "runs", "issue-17");
+  await fs.mkdir(runsRoot, { recursive: true, mode: 0o755 });
+  await fs.chmod(runsRoot, 0o755);
+  const execution = await prepareIsolatedExecutionWorkspace({
+    dataDir,
+    issueNumber: 17,
     remoteUrl: fixture.remote,
-  };
+    baseBranch: "stage",
+  });
 
-  const workspace = await prepareRepositoryWorkspace(options);
-  await fs.writeFile(path.join(fixture.source, "version.txt"), "v2\n");
-  await git(fixture.source, "add", "version.txt");
-  await git(fixture.source, "commit", "-m", "v2");
-  await git(fixture.source, "push", "origin", "stage");
-
-  const refreshed = await prepareRepositoryWorkspace(options);
-
-  assert.equal(refreshed, workspace);
-  assert.equal(await fs.readFile(path.join(workspace, "version.txt"), "utf8"), "v2\n");
-  assert.equal(await git(workspace, "status", "--porcelain"), "");
+  await assert.rejects(fs.access(path.join(execution.workspace, ".git", "objects", "info", "alternates")));
+  const trustedObjectFiles = await objectFileIds(path.join(fixture.remote, "objects"));
+  const executionObjectFiles = await objectFileIds(path.join(execution.workspace, ".git", "objects"));
+  assert.deepEqual([...executionObjectFiles].filter((id) => trustedObjectFiles.has(id)), []);
+  assert.equal(await git(execution.workspace, "remote"), "");
+  assert.equal(await git(execution.workspace, "config", "core.hooksPath"), "/dev/null");
+  assert.match(execution.baseSha, /^[0-9a-f]{40}$/);
+  assert.equal((await fs.stat(runsRoot)).mode & 0o777, 0o700);
+  assert.equal(await fs.readFile(path.join(execution.workspace, "version.txt"), "utf8"), "v1\n");
+  await assert.rejects(fs.access(hookSentinel));
 });
 
 async function createRemoteFixture() {
@@ -102,4 +91,22 @@ async function createRemoteFixture() {
 async function git(cwd: string, ...args: string[]) {
   const result = await execFileAsync("git", args, { cwd });
   return result.stdout.trim();
+}
+
+async function objectFileIds(root: string) {
+  const ids = new Set<string>();
+  const pending = [root];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+      } else if (entry.isFile()) {
+        const stat = await fs.stat(entryPath);
+        ids.add(`${stat.dev}:${stat.ino}`);
+      }
+    }
+  }
+  return ids;
 }

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:void0dev:harness:worker-health:v1",
+  "title": "Issue Harness Worker Health v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "lastHeartbeatAt",
+    "ageMs",
+    "activity"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "status": {
+      "enum": [
+        "healthy",
+        "stale"
+      ]
+    },
+    "lastHeartbeatAt": {
+      "oneOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ageMs": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "activity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "poll",
+        "run"
+      ],
+      "properties": {
+        "poll": {
+          "enum": [
+            "waiting",
+            "polling"
+          ]
+        },
+        "run": {
+          "enum": [
+            "idle",
+            "running"
+          ]
+        }
+      }
+    }
+  }
+}

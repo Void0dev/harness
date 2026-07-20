@@ -1,19 +1,19 @@
-# Merge these jobs under `jobs:` in coolify-deploy.yml for NestJS/PostgreSQL.
-# Replace both placeholders with the exact commands from .harness/config.json.
+# internal input to workflow_compiler.py
 migration-stage:
-  if: github.ref_name == 'stage'
+  if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'stage' && github.event.workflow_run.conclusion == 'success'
   needs: verify
   runs-on: ubuntu-latest
   environment: stage
   steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        ref: ${{ github.event.workflow_run.head_sha }}
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
       with:
         node-version: 22
         cache: npm
     - run: npm ci
-    - name: Migrate staging database
-      run: __HARNESS_MIGRATE_STAGE__
+    - run: __HARNESS_MIGRATE_STAGE__
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
@@ -23,13 +23,7 @@ migration-production:
   runs-on: ubuntu-latest
   environment: production
   steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 22
-        cache: npm
-    - run: npm ci
-    - name: Migrate production database after approval
-      run: __HARNESS_MIGRATE_PRODUCTION__
-      env:
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+    - name: Verify attested aggregate backend evidence contains PostgreSQL receipt
+      run: python3 .harness/evidence_ledger.py verify-backend-capability --evidence .harness/backend-release.json --capability postgres --revision "$GITHUB_SHA"
+# __HARNESS_MIGRATE_PRODUCTION__ executes only in protected backend-prepare.yml.

@@ -1,16 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
-
-export async function pushBranch(branch: string, workspace: string, gitEnv: NodeJS.ProcessEnv) {
-  await execFileAsync("git", ["push", "-u", "origin", branch], {
-    cwd: workspace,
-    env: { ...process.env, ...gitEnv },
-    maxBuffer: 1024 * 1024 * 10,
-  });
-}
-
 export function branchName(issueNumber: number, title: string) {
   const slug = title
     .toLowerCase()

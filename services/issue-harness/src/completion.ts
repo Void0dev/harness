@@ -1,8 +1,7 @@
 export const COMPLETION_MARKER = "<promise>COMPLETE</promise>";
 
-export function extractHumanQuestion(stdout: string) {
-  const match = stdout.match(/<human-attention>([\s\S]*?)<\/human-attention>/i);
-  return match?.[1]?.trim();
+export function hasHumanAttention(stdout: string) {
+  return /<human-attention>[\s\S]*?<\/human-attention>/i.test(stdout);
 }
 
 export function assertAgentRunPublishable(options: {
@@ -10,7 +9,7 @@ export function assertAgentRunPublishable(options: {
   completionSignal?: string;
   hasBranchCommits: boolean;
 }) {
-  if (extractHumanQuestion(options.stdout)) return;
+  if (hasHumanAttention(options.stdout)) return;
   if (options.completionSignal !== COMPLETION_MARKER) {
     throw new Error("Codex stopped without the required completion signal; refusing to publish partial work");
   }

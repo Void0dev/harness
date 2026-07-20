@@ -1,0 +1,32 @@
+convex-prepare-production:
+  runs-on: __HARNESS_PRODUCTION_RUNNER__
+  environment: production
+  __HARNESS_CONVEX_NEEDS__
+  steps:
+    - name: Validate immutable preparation evidence
+      env:
+        PREPARED_REVISION: ${{ inputs.prepared_revision }}
+        PREVIOUS_REVISION: ${{ inputs.previous_revision }}
+        BACKUP_REF: ${{ inputs.backup_ref }}
+        EXPAND_ONLY_EVIDENCE: ${{ inputs.expand_only_evidence }}
+      run: "python3 -c 'import os,re,sys; full=re.compile(r\"[0-9a-fA-F]{40}\").fullmatch; literal=re.compile(r\"[A-Za-z0-9_-]{1,128}\").fullmatch; ok=full(os.environ.get(\"PREPARED_REVISION\",\"\")) and literal(os.environ.get(\"PREVIOUS_REVISION\",\"\")) and literal(os.environ.get(\"BACKUP_REF\",\"\")) and full(os.environ.get(\"EXPAND_ONLY_EVIDENCE\",\"\")); sys.exit(0 if ok else 2)'"
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        ref: ${{ inputs.prepared_revision }}
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: 22
+        cache: npm
+    - run: __HARNESS_INSTALL__
+    - name: Run reviewed backward-compatible Convex preparation
+      run: __HARNESS_PREPARE_CONVEX__
+      env:
+        CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+    - name: Emit Convex capability receipt
+      run: python3 .harness/evidence_ledger.py backend-receipt --capability convex --output convex.json
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: backend-receipt-convex
+        path: convex.json
+        if-no-files-found: error
+        retention-days: 1

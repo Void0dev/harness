@@ -6,6 +6,10 @@ import shlex
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from harness_config import capability_kinds, load_config, single_capability  # noqa: E402
+from harness_safety import validate_harness_safety  # noqa: E402
+
 
 def detect(root: pathlib.Path, run_commands: bool) -> dict:
     package = root / "package.json"
@@ -26,43 +30,27 @@ def detect(root: pathlib.Path, run_commands: bool) -> dict:
         errors.append("missing .harness/config.json")
     else:
         try:
-            config = json.loads(config_path.read_text())
+            _, config = load_config(root)
+            validate_harness_safety(config)
         except Exception as exc:
             errors.append(f"invalid .harness/config.json: {exc}")
 
     command_results = []
     if config:
-        branches = config.get("branches", {})
-        expected = {"stage": "stage", "production": "main", "agentPrBase": "stage"}
-        for key, value in expected.items():
-            if branches.get(key) != value:
-                errors.append(f"branches.{key} must be {value!r}")
-        runtime = config.get("runtime", {})
-        if not runtime.get("healthPath"):
-            errors.append("runtime.healthPath is required")
         commands = config.get("commands", {})
-        for key in ("install", "test", "build", "smoke"):
-            if not commands.get(key):
-                errors.append(f"commands.{key} is required")
-        if not commands.get("typecheck") and not commands.get("lint"):
-            errors.append("commands.typecheck or commands.lint is required")
-        configured_stack = config.get("project", {}).get("stack")
-        if configured_stack not in ("nest-postgres", "convex", "hybrid"):
-            errors.append("project.stack must be nest-postgres, convex, or hybrid")
-        stack_commands = []
-        if configured_stack in ("nest-postgres", "hybrid"):
-            stack_commands.append("migrateCheck")
-            for key in ("migrateCheck", "migrateStage", "migrateProduction"):
-                if not commands.get(key):
-                    errors.append(f"commands.{key} is required for {configured_stack}")
-        if configured_stack in ("convex", "hybrid"):
-            stack_commands.append("backendCheck")
-            for key in ("backendCheck", "deployStage", "deployProduction"):
-                if not commands.get(key):
-                    errors.append(f"commands.{key} is required for {configured_stack}")
+        kinds = capability_kinds(config)
+        capability_commands = [
+            (f"{label}.check", single_capability(config, kind)["commands"]["check"])
+            for kind, label in (
+                ("coolify.postgresql", "postgres"),
+                ("convex.deployment", "convex"),
+            )
+            if kind in kinds
+        ]
         if run_commands:
-            for key in ("install", "test", "lint", "typecheck", "build", "smoke", *stack_commands):
-                command = commands.get(key)
+            command_plan = [(key, commands.get(key)) for key in ("install", "test", "lint", "typecheck", "build", "smoke")]
+            command_plan.extend(capability_commands)
+            for key, command in command_plan:
                 if not command:
                     continue
                 completed = subprocess.run(

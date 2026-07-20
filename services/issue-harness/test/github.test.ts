@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+delete process.env.OPENAI_API_KEY;
 process.env.GITHUB_TOKEN = "test-token";
 process.env.GITHUB_OWNER = "acme";
 process.env.GITHUB_REPO = "service";
+process.env.CODEX_AUTH_MODE = "broker";
+process.env.CODEX_BROKER_URL = "http://codex-broker:8080/v1";
+process.env.CODEX_BROKER_AUDIENCE = "codex-broker";
+process.env.CODEX_BROKER_SIGNING_SECRET = "s".repeat(32);
+process.env.SANDBOX_NETWORK = "codex-broker-internal";
+process.env.DOCKER_HOST = "unix:///run/sandbox-engine/docker.sock";
+process.env.SANDBOX_DOCKER_DAEMON_ID = "rootless-daemon";
 
 test("reuses an existing open pull request without creating a duplicate", async () => {
   const { GithubTracker } = await import("../src/github.js");

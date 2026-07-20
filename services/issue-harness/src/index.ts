@@ -1,43 +1,65 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./env.js";
-import { extractHumanQuestion } from "./completion.js";
-import { branchName, pushBranch } from "./git.js";
+import { hasHumanAttention } from "./completion.js";
+import { branchName } from "./git.js";
 import { GithubTracker } from "./github.js";
 import { startHealthServer } from "./health.js";
 import { runAgent } from "./runner.js";
 import {
   githubGitAuthEnv,
   githubRepositoryRemote,
-  prepareRepositoryWorkspace,
+  prepareIsolatedExecutionWorkspace,
 } from "./repository.js";
-import { nextRunAction, StateStore } from "./state.js";
-import { redactForGithub } from "./security.js";
+import { nextRunAction, recoverStalePublication, StateStore } from "./state.js";
+import {
+  acquireProcessLock,
+  ensurePrivateRuntimeDirectory,
+  ensureRuntimeIdentity,
+  publicHarnessStatus,
+} from "./security.js";
+import { publishArtifact, StalePublicationArtifactError } from "./publisher.js";
+import { RunScheduler } from "./scheduler.js";
 
 const tracker = new GithubTracker();
 const state = new StateStore(config.dataDir);
 const gitEnv = githubGitAuthEnv(config.githubToken);
 const remoteUrl = githubRepositoryRemote(config.owner, config.repo);
-const outboundSecrets = [config.githubToken, process.env.OPENAI_API_KEY];
-let activeRuns = 0;
-let lastSuccessfulPollAt = Date.now();
+const outboundSecrets = [
+  config.githubToken,
+  config.codexBrokerSigningSecret,
+  config.healthDetailsToken,
+];
+const scheduler = new RunScheduler<NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>>(
+  config.maxConcurrentRuns,
+  (issue) => issue.number,
+);
+let lastSuccessfulPollAt: number | null = null;
+let lastWorkerHeartbeatAt: number | null = null;
+let pollState: "waiting" | "polling" = "waiting";
+let runState: "idle" | "running" = "idle";
 
 async function tick() {
-  if (activeRuns >= config.maxConcurrentRuns) {
-    lastSuccessfulPollAt = Date.now();
-    return;
-  }
-
-  const issue = await tracker.nextIssue();
-  lastSuccessfulPollAt = Date.now();
-  if (!issue) return;
-
-  activeRuns += 1;
-  try {
-    await processIssue(issue);
-  } finally {
-    activeRuns -= 1;
-  }
+  await scheduler.poll(
+    async () => {
+      pollState = "polling";
+      try {
+        const issue = await tracker.nextIssue();
+        lastSuccessfulPollAt = Date.now();
+        return issue;
+      } finally {
+        pollState = "waiting";
+      }
+    },
+    async (issue) => {
+      runState = "running";
+      try {
+        await processIssue(issue);
+      } finally {
+        runState = "idle";
+      }
+    },
+  );
 }
 
 async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>) {
@@ -55,35 +77,34 @@ async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker[
     await tracker.comment(issue.number, `Codex picked this up on branch \`${branch}\`.`);
   }
 
-  await fs.mkdir(config.dataDir, { recursive: true });
-  let workspace;
+  if (retryingPublish) {
+    await publishIssue(issue, branch);
+    return;
+  }
+
+  await ensurePrivateRuntimeDirectory(config.dataDir);
+  let execution;
   try {
-    workspace = await prepareRepositoryWorkspace({
+    execution = await prepareIsolatedExecutionWorkspace({
       dataDir: config.dataDir,
-      owner: config.owner,
-      repo: config.repo,
-      baseBranch: config.baseBranch,
+      issueNumber: issue.number,
       remoteUrl,
+      baseBranch: config.baseBranch,
       gitEnv,
     });
   } catch (error) {
-    const message = redactForGithub(error instanceof Error ? error.message : String(error), outboundSecrets);
+    console.error("Workspace preparation failed", error);
     await state.set({
       issueNumber: issue.number,
       branch,
-      status: retryingPublish ? "publish_pending" : "failed",
+      status: "failed",
       lastSessionId: existing?.lastSessionId,
       lastLogPath: existing?.lastLogPath,
     });
     await tracker.needsHuman(
       issue.number,
-      `Codex run failed before finishing.\n\n\`\`\`text\n${message}\n\`\`\`\n\nFix the runner/sandbox problem, remove \`ai:needs-human\`, and the harness will retry.`,
+      publicHarnessStatus("run-failed"),
     );
-    return;
-  }
-
-  if (retryingPublish) {
-    await publishIssue(issue, branch, workspace);
     return;
   }
 
@@ -92,19 +113,21 @@ async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker[
 
   let result;
   try {
-    result = await runAgent(issue, branch, comments, workspace);
+    result = await runAgent(issue, branch, comments, execution.workspace, execution.baseSha);
   } catch (error) {
-    const message = redactForGithub(error instanceof Error ? error.message : String(error), outboundSecrets);
+    console.error("Coding run failed", error);
     await state.set({ issueNumber: issue.number, branch, status: "failed" });
     await tracker.needsHuman(
       issue.number,
-      `Codex run failed before finishing.\n\n\`\`\`text\n${message}\n\`\`\`\n\nFix the runner/sandbox problem, remove \`ai:needs-human\`, and the harness will retry.`,
+      publicHarnessStatus("run-failed"),
     );
     return;
+  } finally {
+    await fs.rm(execution.workspace, { recursive: true, force: true });
   }
-  const question = extractHumanQuestion(result.stdout);
+  const needsHuman = hasHumanAttention(result.stdout);
 
-  if (question) {
+  if (needsHuman) {
     await state.set({
       issueNumber: issue.number,
       branch,
@@ -112,8 +135,12 @@ async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker[
       lastSessionId: result.sessionId,
       lastLogPath: result.logFilePath,
     });
-    await tracker.needsHuman(issue.number, redactForGithub(question, outboundSecrets));
+    await tracker.needsHuman(issue.number, publicHarnessStatus("human-attention"));
     return;
+  }
+
+  if (!result.publicationArtifact) {
+    throw new Error("Completed agent run did not produce a publication artifact");
   }
 
   await state.set({
@@ -122,37 +149,58 @@ async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker[
     status: "publish_pending",
     lastSessionId: result.sessionId,
     lastLogPath: result.logFilePath,
+    publicationArtifact: result.publicationArtifact,
   });
-  await publishIssue(issue, branch, workspace);
+  await publishIssue(issue, branch);
 }
 
 async function publishIssue(
   issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>,
   branch: string,
-  workspace: string,
 ) {
   const pending = state.get(issue.number);
+  if (!pending?.publicationArtifact) {
+    throw new Error("Refusing to publish without an immutable publication artifact");
+  }
   let prUrl;
+  let publishedCommitSha;
   try {
-    await pushBranch(branch, workspace, gitEnv);
+    const published = await publishArtifact({
+      dataDir: config.dataDir,
+      remoteUrl,
+      baseBranch: config.baseBranch,
+      issueNumber: issue.number,
+      branch,
+      artifact: pending.publicationArtifact,
+      gitEnv,
+      configuredSecrets: outboundSecrets,
+    });
+    publishedCommitSha = published.commitSha;
     prUrl = await tracker.findOrCreatePullRequest(
       issue.number,
       branch,
       issue.title,
-      `Automated Codex/Sandcastle run for #${issue.number}.\n\nLog: ${pending?.lastLogPath ?? "not available"}`,
+      `Automated Codex/Sandcastle run for #${issue.number}.`,
     );
   } catch (error) {
-    const message = redactForGithub(error instanceof Error ? error.message : String(error), outboundSecrets);
+    console.error("Publication failed", error);
+    if (error instanceof StalePublicationArtifactError) {
+      await state.set(recoverStalePublication(pending, new Date().toISOString()));
+      await tracker.needsHuman(issue.number, publicHarnessStatus("stale-base"));
+      return;
+    }
     await state.set({
       issueNumber: issue.number,
       branch,
       status: "publish_pending",
       lastSessionId: pending?.lastSessionId,
       lastLogPath: pending?.lastLogPath,
+      publicationArtifact: pending.publicationArtifact,
+      publishedCommitSha: pending.publishedCommitSha,
     });
     await tracker.needsHuman(
       issue.number,
-      `Codex finished locally, but publishing the branch or pull request failed.\n\n\`\`\`text\n${message}\n\`\`\`\n\nFix the GitHub access problem, remove \`ai:needs-human\`, and the harness will retry publication without rerunning the coding agent.`,
+      publicHarnessStatus("publication-failed"),
     );
     return;
   }
@@ -163,6 +211,8 @@ async function publishIssue(
     status: "finished",
     lastSessionId: pending?.lastSessionId,
     lastLogPath: pending?.lastLogPath,
+    publicationArtifact: pending.publicationArtifact,
+    publishedCommitSha,
     prUrl,
   });
   await tracker.moveStatus(issue.number, "finished");
@@ -170,33 +220,43 @@ async function publishIssue(
 }
 
 async function main() {
+  await ensureRuntimeIdentity(config.dataDir, `${config.owner}/${config.repo}`);
+  await acquireProcessLock(config.dataDir);
   await state.load();
   await tracker.assertRepositoryAccess();
   await tracker.ensureLabels();
-  const workspace = await prepareRepositoryWorkspace({
-    dataDir: config.dataDir,
-    owner: config.owner,
-    repo: config.repo,
-    baseBranch: config.baseBranch,
-    remoteUrl,
-    gitEnv,
-  });
-  await fs.access(path.join(workspace, ".sandcastle", "prompt.md"));
   await startHealthServer({
     port: config.healthPort,
     repository: `${config.owner}/${config.repo}`,
     workspaceOrigin: remoteUrl,
-    isReady: () =>
-      Date.now() - lastSuccessfulPollAt < Math.max(config.pollIntervalMs * 3, 180_000),
+    isReady: () => {
+      const staleAfterMs = Math.max(config.pollIntervalMs * 3, 180_000);
+      const pollIsFresh = lastSuccessfulPollAt !== null
+        && Date.now() - lastSuccessfulPollAt < staleAfterMs;
+      const heartbeatIsFresh = lastWorkerHeartbeatAt !== null
+        && Date.now() - lastWorkerHeartbeatAt < staleAfterMs;
+      return pollIsFresh || (runState === "running" && heartbeatIsFresh);
+    },
+    getWorkerHeartbeatAt: () => lastWorkerHeartbeatAt,
+    getWorkerActivity: () => ({ poll: pollState, run: runState }),
+    workerHeartbeatStaleAfterMs: Math.max(config.pollIntervalMs * 3, 180_000),
+    healthDetailsToken: config.healthDetailsToken,
   });
   console.log(`Issue harness started for ${config.owner}/${config.repo}`);
 
-  await tick();
+  const heartbeatIntervalMs = Math.min(10_000, Math.max(1_000, Math.floor(config.pollIntervalMs / 3)));
+  lastWorkerHeartbeatAt = Date.now();
   setInterval(() => {
+    lastWorkerHeartbeatAt = Date.now();
+  }, heartbeatIntervalMs).unref();
+
+  const poll = () => {
     tick().catch((error) => {
       console.error(error);
     });
-  }, config.pollIntervalMs);
+  };
+  setInterval(poll, config.pollIntervalMs);
+  poll();
 }
 
 main().catch((error) => {

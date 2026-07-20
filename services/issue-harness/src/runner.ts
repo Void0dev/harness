@@ -1,21 +1,24 @@
 import path from "node:path";
 import fs from "node:fs/promises";
-import { spawn } from "node:child_process";
 import { codex, run } from "@ai-hero/sandcastle";
-import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { config } from "./env.js";
-import { assertAgentRunPublishable, COMPLETION_MARKER, extractHumanQuestion } from "./completion.js";
+import { assertAgentRunPublishable, COMPLETION_MARKER, hasHumanAttention } from "./completion.js";
 import { TrackerIssue } from "./github.js";
 import { branchHasCommits } from "./repository.js";
+import { createPublicationArtifact, PublicationArtifactReference } from "./artifact.js";
 import {
   assertNoRepositoryEnvironmentPassthrough,
+  ensurePrivateRuntimeDirectory,
+  sandboxControlEnvironment,
   withSanitizedProcessEnvironment,
 } from "./security.js";
+import { hardenedDocker, mintBrokerToken } from "./runtime.js";
 
 export type AgentRunResult = {
   stdout: string;
   logFilePath?: string;
   sessionId?: string;
+  publicationArtifact?: PublicationArtifactReference;
 };
 
 export async function runAgent(
@@ -23,15 +26,22 @@ export async function runAgent(
   branch: string,
   comments: string,
   workspace: string,
+  baseSha: string,
 ) {
-  const codexHome = path.join(config.dataDir, "codex");
+  const runRoot = path.join(config.dataDir, "runs");
   const sandcastleLogDir = path.join(config.dataDir, "sandcastle");
-  await fs.mkdir(codexHome, { recursive: true });
-  await fs.mkdir(sandcastleLogDir, { recursive: true });
+  await ensurePrivateRuntimeDirectory(runRoot);
+  await ensurePrivateRuntimeDirectory(sandcastleLogDir);
   await assertNoRepositoryEnvironmentPassthrough(workspace);
-  if (config.codexAuthMode === "api-key") {
-    await ensureCodexApiKeyLogin(codexHome);
-  }
+  const codexHome = await fs.mkdtemp(path.join(runRoot, `issue-${issue.number}-codex-`));
+  await fs.chmod(codexHome, 0o700);
+  const brokerToken = mintBrokerToken({
+    signingSecret: config.codexBrokerSigningSecret,
+    audience: config.codexBrokerAudience,
+    repository: `${config.owner}/${config.repo}`,
+    issueNumber: issue.number,
+    ttlSeconds: config.codexBrokerTokenTtlSeconds,
+  });
 
   let result;
   try {
@@ -39,16 +49,25 @@ export async function runAgent(
       cwd: workspace,
       agent: codex(config.codexModel, {
         effort: config.codexReasoningEffort as "low" | "medium" | "high" | "xhigh",
-        env: codexAgentEnv(),
+        env: codexAgentEnv(brokerToken),
       }),
-      sandbox: docker({
+      sandbox: hardenedDocker({
         imageName: config.sandcastleImage,
         containerUid: 10001,
         containerGid: 10001,
-        env: {
+        environment: {
           HOME: "/home/agent",
           GIT_CONFIG_GLOBAL: "/tmp/agent.gitconfig",
+          ...sandboxControlEnvironment(),
         },
+        network: config.sandboxNetwork,
+        memoryMb: config.sandboxMemoryMb,
+        cpus: config.sandboxCpus,
+        pidsLimit: config.sandboxPidsLimit,
+        tmpfsMb: config.sandboxTmpfsMb,
+        maxOutputBytes: config.sandboxMaxOutputBytes,
+        requireRootlessDaemon: config.sandboxDaemonMode === "local-rootless",
+        expectedDaemonId: config.sandboxDockerDaemonId,
         mounts: [
           {
             hostPath: codexHome,
@@ -80,14 +99,17 @@ export async function runAgent(
     const detail = await latestCodexSessionDiagnostic(codexHome);
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(detail ? `${message}\n\n${detail}` : message);
+  } finally {
+    await fs.rm(codexHome, { recursive: true, force: true });
   }
 
   const stdout = result.stdout ?? "";
-  const hasBranchCommits = extractHumanQuestion(stdout)
+  const needsHuman = hasHumanAttention(stdout);
+  const hasBranchCommits = needsHuman
     ? false
     : result.commits.length > 0 || await branchHasCommits(
       workspace,
-      `origin/${config.baseBranch}`,
+      baseSha,
       branch,
     );
   assertAgentRunPublishable({
@@ -96,10 +118,26 @@ export async function runAgent(
     hasBranchCommits,
   });
 
+  const publicationArtifact = needsHuman
+    ? undefined
+    : await createPublicationArtifact({
+      dataDir: config.dataDir,
+      issueNumber: issue.number,
+      branch,
+      workspace,
+      baseSha,
+      configuredSecrets: [
+        config.githubToken,
+        config.codexBrokerSigningSecret,
+        config.healthDetailsToken,
+      ],
+    });
+
   return {
     stdout,
     logFilePath: result.logFilePath,
     sessionId: result.iterations.at(-1)?.sessionId,
+    publicationArtifact,
   } satisfies AgentRunResult;
 }
 
@@ -133,7 +171,7 @@ async function latestCodexSessionDiagnostic(codexHome: string) {
   const latest = jsonlFiles.sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
   if (!latest) return "";
 
-  const content = await fs.readFile(latest.filePath, "utf8");
+  const content = await readFileTail(latest.filePath, 256 * 1024);
   const diagnosticLines: string[] = [];
   for (const line of content.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -166,57 +204,23 @@ async function latestCodexSessionDiagnostic(codexHome: string) {
   return `Latest Codex session diagnostics (${latest.filePath}):\n${unique.join("\n")}`;
 }
 
-function codexAgentEnv() {
+function codexAgentEnv(brokerToken: string) {
   return {
     CODEX_HOME: "/home/agent/.codex",
+    OPENAI_BASE_URL: config.codexBrokerUrl,
+    OPENAI_API_KEY: brokerToken,
   };
 }
 
-async function ensureCodexApiKeyLogin(codexHome: string) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is required for Codex login.");
+async function readFileTail(filePath: string, maxBytes: number) {
+  const stat = await fs.stat(filePath);
+  const length = Math.min(stat.size, maxBytes);
+  const file = await fs.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    await file.read(buffer, 0, length, stat.size - length);
+    return buffer.toString("utf8");
+  } finally {
+    await file.close();
   }
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      "docker",
-      [
-        "run",
-        "--rm",
-        "--user",
-        "10001:10001",
-        "-i",
-        "-e",
-        "HOME=/home/agent",
-        "-e",
-        "CODEX_HOME=/home/agent/.codex",
-        "-v",
-        `${codexHome}:/home/agent/.codex`,
-        config.sandcastleImage,
-        "codex",
-        "login",
-        "--with-api-key",
-      ],
-      {
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-
-    const stderr: Buffer[] = [];
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.stdin.end(`${apiKey}\n`);
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(
-          `codex login failed with exit code ${code}: ${Buffer.concat(stderr).toString("utf8").trim()}`,
-        ),
-      );
-    });
-  });
 }

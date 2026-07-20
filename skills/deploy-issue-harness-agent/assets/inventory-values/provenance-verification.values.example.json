@@ -1,0 +1,10 @@
+{
+  "harnessManifest": null,
+  "sandboxManifest": null,
+  "harnessAttestationBundle": null,
+  "sandboxAttestationBundle": null,
+  "trustedRoot": null,
+  "sourceRef": null,
+  "sourceCommit": null,
+  "publicationRunId": null
+}

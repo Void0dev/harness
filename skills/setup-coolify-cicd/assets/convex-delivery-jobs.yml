@@ -1,19 +1,19 @@
-# Merge these jobs under `jobs:` in coolify-deploy.yml for Convex projects.
-# Replace both placeholders with the exact commands from .harness/config.json.
+# internal input to workflow_compiler.py
 backend-stage:
-  if: github.ref_name == 'stage'
+  if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'stage' && github.event.workflow_run.conclusion == 'success'
   needs: verify
   runs-on: ubuntu-latest
   environment: stage
   steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        ref: ${{ github.event.workflow_run.head_sha }}
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
       with:
         node-version: 22
         cache: npm
     - run: npm ci
-    - name: Deploy Convex staging backend
-      run: __HARNESS_CONVEX_DEPLOY_STAGE__
+    - run: __HARNESS_CONVEX_DEPLOY_STAGE__
       env:
         CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
 
@@ -23,13 +23,7 @@ backend-production:
   runs-on: ubuntu-latest
   environment: production
   steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 22
-        cache: npm
-    - run: npm ci
-    - name: Deploy Convex production backend
-      run: __HARNESS_CONVEX_DEPLOY_PRODUCTION__
-      env:
-        CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+    - name: Verify attested aggregate backend evidence contains Convex receipt
+      run: python3 .harness/evidence_ledger.py verify-backend-capability --evidence .harness/backend-release.json --capability convex --revision "$GITHUB_SHA"
+# __HARNESS_CONVEX_DEPLOY_PRODUCTION__ executes only in protected backend-prepare.yml.

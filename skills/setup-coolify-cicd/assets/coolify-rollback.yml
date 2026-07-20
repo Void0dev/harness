@@ -1,0 +1,83 @@
+name: Roll back from verified deployment evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_evidence_run_id:
+        description: Target deployment evidence workflow run ID
+        required: true
+      target_evidence_artifact_id:
+        description: Target deployment evidence artifact ID
+        required: true
+      target_evidence_artifact_name:
+        description: Target deployment evidence artifact name
+        required: true
+
+permissions:
+  actions: read
+  attestations: write
+  contents: read
+  id-token: write
+
+concurrency:
+  group: coolify-resource-${{ vars.COOLIFY_RESOURCE_UUID }}
+  cancel-in-progress: false
+
+jobs:
+  rollback-production:
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Resolve current head and target evidence; derive revision
+        id: resolve
+        env:
+          TARGET_RUN_ID: ${{ inputs.target_evidence_run_id }}
+          TARGET_ARTIFACT_ID: ${{ inputs.target_evidence_artifact_id }}
+          TARGET_ARTIFACT_NAME: ${{ inputs.target_evidence_artifact_name }}
+          COOLIFY_RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
+          COOLIFY_HEALTH_URL: ${{ vars.COOLIFY_HEALTH_URL }}
+        run: |
+          python3 .harness/evidence_ledger.py resolve-stage-head --repository "$GITHUB_REPOSITORY" \
+            --lane production --resource-uuid "$COOLIFY_RESOURCE_UUID" --health-url "$COOLIFY_HEALTH_URL" \
+            --output .harness/current-head.json --deploy-record-output .harness/deployment-evidence/current.json
+          python3 .harness/evidence_ledger.py resolve-locator --schema deployment-success-v1 \
+            --lane production --run-id "$TARGET_RUN_ID" --artifact-id "$TARGET_ARTIFACT_ID" \
+            --artifact-name "$TARGET_ARTIFACT_NAME" --output .harness/target-evidence.json
+          python3 .harness/evidence_ledger.py derive-rollback --evidence .harness/target-evidence.json >> "$GITHUB_OUTPUT"
+      - name: Deploy revision derived from verified target evidence
+        id: deploy
+        env:
+          ROLLBACK_REVISION: ${{ steps.resolve.outputs.revision }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          COOLIFY_RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
+          COOLIFY_HEALTH_URL: ${{ vars.COOLIFY_HEALTH_URL }}
+          COOLIFY_PIN_TOKEN: ${{ secrets.COOLIFY_PIN_TOKEN }}
+          COOLIFY_PIN_TOKEN_SCOPES: ${{ vars.COOLIFY_PIN_TOKEN_SCOPES }}
+          COOLIFY_PIN_TOKEN_EXPIRES_AT: ${{ vars.COOLIFY_PIN_TOKEN_EXPIRES_AT }}
+          COOLIFY_PIN_TOKEN_IP_ALLOWLISTED: ${{ vars.COOLIFY_PIN_TOKEN_IP_ALLOWLISTED }}
+          COOLIFY_DEPLOY_TOKEN: ${{ secrets.COOLIFY_DEPLOY_TOKEN }}
+          COOLIFY_DEPLOY_TOKEN_SCOPES: ${{ vars.COOLIFY_DEPLOY_TOKEN_SCOPES }}
+          COOLIFY_DEPLOY_TOKEN_EXPIRES_AT: ${{ vars.COOLIFY_DEPLOY_TOKEN_EXPIRES_AT }}
+          COOLIFY_DEPLOY_TOKEN_IP_ALLOWLISTED: ${{ vars.COOLIFY_DEPLOY_TOKEN_IP_ALLOWLISTED }}
+        run: |
+          python3 .harness/deploy_exact_revision.py --resource-uuid "$COOLIFY_RESOURCE_UUID" \
+            --revision "$ROLLBACK_REVISION" --health-url "$COOLIFY_HEALTH_URL"
+          python3 .harness/evidence_ledger.py successor --lane production \
+            --predecessor .harness/current-head.json --deploy-record .harness/deployment-evidence/current.json \
+            --target-revision "$ROLLBACK_REVISION" --output evidence.json
+      - uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        id: attest
+        with:
+          subject-path: evidence.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        id: publish
+        with:
+          name: deployment-production-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Compensate to verified predecessor
+        if: failure() && steps.deploy.outcome == 'success'
+        run: python3 .harness/evidence_ledger.py compensate --predecessor .harness/current-head.json

@@ -3,13 +3,13 @@ name: Publish harness images
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
   id-token: write
+  attestations: write
 
 jobs:
   publish:
@@ -22,9 +22,16 @@ jobs:
           - image: sandcastle-harness
             dockerfile: .sandcastle/Dockerfile
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - name: Validate trusted publication ref
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "image publication is allowed only from refs/heads/main" >&2
+            exit 2
+          fi
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -34,13 +41,26 @@ jobs:
         shell: bash
         run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >>"$GITHUB_OUTPUT"
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
           provenance: mode=max
           sbom: true
+          build-args: |
+            SOURCE_REPOSITORY=https://github.com/${{ github.repository }}
+            SOURCE_COMMIT=${{ github.sha }}
           tags: ghcr.io/${{ steps.names.outputs.owner }}/${{ matrix.image }}:${{ github.sha }}
+      - name: Attest image subject and source
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-name: ghcr.io/${{ steps.names.outputs.owner }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
       - name: Record immutable reference
-        run: echo "ghcr.io/${{ steps.names.outputs.owner }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}" >>"$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "subject=ghcr.io/${{ steps.names.outputs.owner }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}" >>"$GITHUB_STEP_SUMMARY"
+          echo "source=https://github.com/${GITHUB_REPOSITORY}" >>"$GITHUB_STEP_SUMMARY"
+          echo "source_commit=${GITHUB_SHA}" >>"$GITHUB_STEP_SUMMARY"
+          echo "publication_run_id=${GITHUB_RUN_ID}" >>"$GITHUB_STEP_SUMMARY"

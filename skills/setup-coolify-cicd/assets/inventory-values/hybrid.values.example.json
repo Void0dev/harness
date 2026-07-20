@@ -1,0 +1,20 @@
+{
+  "source": "coolify-api",
+  "applications": [
+    { "applicationUuid": null, "projectUuid": null, "serverUuid": null, "environmentName": "stage", "name": null, "repository": null, "branch": "stage", "domain": null },
+    { "applicationUuid": null, "projectUuid": null, "serverUuid": null, "environmentName": "production", "name": null, "repository": null, "branch": "main", "domain": null }
+  ],
+  "databases": [
+    { "databaseUuid": null, "databaseType": "postgresql", "projectUuid": null, "serverUuid": null, "environmentName": "stage", "ready": true, "readinessSource": "coolify-health" },
+    { "databaseUuid": null, "databaseType": "postgresql", "projectUuid": null, "serverUuid": null, "environmentName": "production", "ready": true, "readinessSource": "coolify-health" }
+  ],
+  "convexDeployments": [
+    { "capabilityId": "convex", "lane": "stage", "projectRef": null, "deploymentRef": null, "deploymentType": "permanent", "deployKeyRef": null, "deployKeyScope": null, "ready": true, "readinessSource": "convex-deployment" },
+    { "capabilityId": "convex", "lane": "production", "projectRef": null, "deploymentRef": null, "deploymentType": "permanent", "deployKeyRef": null, "deployKeyScope": null, "ready": true, "readinessSource": "convex-deployment" }
+  ],
+  "deliveryEnvironments": [
+    { "lane": "stage", "environmentName": "stage", "branch": "stage", "credentialScope": null, "requiredReviewers": 0, "preventSelfReview": false },
+    { "lane": "production", "environmentName": "production", "branch": "main", "credentialScope": null, "requiredReviewers": 1, "preventSelfReview": true }
+  ],
+  "environmentVariables": []
+}

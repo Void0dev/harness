@@ -1,0 +1,12 @@
+{
+  "source": "coolify-api",
+  "applicationUuid": null,
+  "serverUuid": null,
+  "harnessImage": null,
+  "sandboxImage": null,
+  "dataDir": null,
+  "replicas": 1,
+  "rolloutHarnessImage": null,
+  "rolloutSandboxImage": null,
+  "rolloutStatus": "running"
+}

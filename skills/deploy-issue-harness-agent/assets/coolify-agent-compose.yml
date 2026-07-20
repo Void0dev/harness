@@ -9,24 +9,39 @@ services:
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
       MAX_CONCURRENT_RUNS: 1
       HEALTH_PORT: 3000
-      CODEX_AUTH_MODE: ${CODEX_AUTH_MODE:?set api-key or subscription}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HARNESS_HEALTH_DETAILS_TOKEN: ${HARNESS_HEALTH_DETAILS_TOKEN:?set a dedicated 32+ character health-details bearer token}
+      CODEX_AUTH_MODE: broker
+      CODEX_BROKER_URL: ${CODEX_BROKER_URL:?set the internal OpenAI-compatible broker /v1 URL}
+      CODEX_BROKER_AUDIENCE: ${CODEX_BROKER_AUDIENCE:-codex-broker}
+      CODEX_BROKER_SIGNING_SECRET: ${CODEX_BROKER_SIGNING_SECRET:?set a 32+ character broker signing secret}
+      CODEX_BROKER_TOKEN_TTL_SECONDS: ${CODEX_BROKER_TOKEN_TTL_SECONDS:-1800}
       CODEX_MODEL: ${CODEX_MODEL:-gpt-5.4}
       CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-high}
       SANDCASTLE_IMAGE: ${SANDCASTLE_IMAGE:?set an immutable sandbox image}
+      SANDBOX_NETWORK: ${SANDBOX_NETWORK:?set a pre-created internal Docker network shared only with the broker}
+      SANDBOX_MEMORY_MB: ${SANDBOX_MEMORY_MB:-4096}
+      SANDBOX_CPUS: ${SANDBOX_CPUS:-2}
+      SANDBOX_PIDS_LIMIT: ${SANDBOX_PIDS_LIMIT:-256}
+      SANDBOX_TMPFS_MB: ${SANDBOX_TMPFS_MB:-256}
+      SANDBOX_MAX_OUTPUT_BYTES: ${SANDBOX_MAX_OUTPUT_BYTES:-4194304}
       REQUIRE_PINNED_IMAGES: "true"
       SANDCASTLE_BUILD_LOCAL: "false"
       SANDBOX_REGISTRY_SERVER: ${SANDBOX_REGISTRY_SERVER:-}
       SANDBOX_REGISTRY_USERNAME: ${SANDBOX_REGISTRY_USERNAME:-}
       SANDBOX_REGISTRY_TOKEN: ${SANDBOX_REGISTRY_TOKEN:-}
       HARNESS_DATA_DIR: ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}
+      DOCKER_HOST: unix:///run/sandbox-engine/docker.sock
+      SANDBOX_DOCKER_SOCKET_PATH: /run/sandbox-engine/docker.sock
+      SANDBOX_DOCKER_DAEMON_ID: ${SANDBOX_DOCKER_DAEMON_ID:?set the expected rootless Docker daemon ID}
+      DOCKER_TLS_VERIFY: ""
+      DOCKER_CERT_PATH: ""
     volumes:
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}:${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SANDBOX_DOCKER_SOCKET:?set the dedicated rootless Docker socket}:/run/sandbox-engine/docker.sock
     expose:
       - "3000"
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://127.0.0.1:3000/health"]
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:3000/live"]
       interval: 30s
       timeout: 5s
       retries: 3

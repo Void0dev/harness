@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertAgentRunPublishable, extractHumanQuestion } from "../src/completion.js";
+import { assertAgentRunPublishable, hasHumanAttention } from "../src/completion.js";
 
 test("refuses a committed run without the completion signal", () => {
   assert.throws(
@@ -30,6 +30,12 @@ test("refuses completion on an empty branch", () => {
 
 test("allows a human-attention response without completion", () => {
   const stdout = "<human-attention>Which API contract applies?</human-attention>";
-  assert.equal(extractHumanQuestion(stdout), "Which API contract applies?");
+  assert.equal(hasHumanAttention(stdout), true);
   assert.doesNotThrow(() => assertAgentRunPublishable({ stdout, hasBranchCommits: false }));
+});
+
+test("does not expose raw human-attention contents", () => {
+  const moduleSource = hasHumanAttention.toString();
+  assert.doesNotMatch(moduleSource, /return\s+match\?\./);
+  assert.equal(hasHumanAttention("<human-attention>upstream-secret</human-attention>"), true);
 });
