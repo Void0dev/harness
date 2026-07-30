@@ -165,6 +165,33 @@ class ProductContractTest(unittest.TestCase):
         self.assertIn("harness-runs:", compose)
         self.assertIn("opencode-state-v2:", compose)
 
+    def test_coolify_model_key_is_a_web_only_compose_config(self):
+        compose = (ROOT / "coolify/harness.production.compose.yml").read_text()
+        web = compose.split("  opencode-web:", 1)[1].split("volumes:", 1)[0]
+        worker = compose.split("  issue-harness:", 1)[1].split("  opencode-web:", 1)[0]
+
+        self.assertNotIn("VOID_AI_API_KEY: ${", compose)
+        self.assertIn("VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key", web)
+        self.assertIn("configs:\n      - source: void-ai-api-key", web)
+        self.assertNotIn("void-ai-api-key", worker)
+        self.assertIn("void-ai-api-key:\n    content: ${VOID_AI_API_KEY:?", compose)
+
+    def test_all_runtime_compose_files_mount_the_model_key_as_a_web_only_config(self):
+        for relative in (
+            "docker-compose.local.yml",
+            "coolify/docker-compose.yml",
+            "skills/deploy-issue-harness-agent/assets/coolify-agent-compose.yml",
+        ):
+            with self.subTest(compose=relative):
+                compose = (ROOT / relative).read_text()
+                web = compose.split("  opencode-web:", 1)[1].split("volumes:", 1)[0]
+                worker = compose.split("  issue-harness:", 1)[1].split("  opencode-web:", 1)[0]
+                self.assertNotIn("VOID_AI_API_KEY: ${", compose)
+                self.assertIn("VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key", web)
+                self.assertIn("configs:\n      - source: void-ai-api-key", web)
+                self.assertNotIn("void-ai-api-key", worker)
+                self.assertIn("void-ai-api-key:\n    content: ${VOID_AI_API_KEY:?", compose)
+
     def test_secret_scan_covers_fine_grained_github_and_openai_keys(self):
         module = load_module("tests/test_repository_hygiene.py", "product_secret_patterns")
         self.assertTrue(hasattr(module, "SECRET_PATTERNS"))

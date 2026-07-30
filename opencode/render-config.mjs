@@ -9,8 +9,14 @@ const parsedBaseURL = new URL(baseURL);
 if (!new Set(["http:", "https:"]).has(parsedBaseURL.protocol) || parsedBaseURL.username || parsedBaseURL.password) {
   throw new Error("VOID_AI_BASE_URL must be an HTTP(S) URL without embedded credentials");
 }
-const apiKey = process.env.VOID_AI_API_KEY;
-if (!apiKey || /\s/.test(apiKey)) throw new Error("VOID_AI_API_KEY is required and must not contain whitespace");
+const apiKeyFile = process.env.VOID_AI_API_KEY_FILE;
+if (!apiKeyFile || !path.isAbsolute(apiKeyFile)) {
+  throw new Error("VOID_AI_API_KEY_FILE must be an absolute path to the model gateway key");
+}
+const apiKey = (await fs.readFile(apiKeyFile, "utf8")).trim();
+if (!apiKey || /\s/.test(apiKey)) {
+  throw new Error("VOID_AI_API_KEY_FILE must contain a model gateway key without whitespace");
+}
 const modelID = process.env.VOID_AI_MODEL_ID;
 if (!modelID || !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(modelID)) {
   throw new Error("VOID_AI_MODEL_ID must be a bounded model identifier");
