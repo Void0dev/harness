@@ -4,6 +4,7 @@ services:
       context: ..
       dockerfile: services/issue-harness/Dockerfile
     environment:
+      NODE_ENV: production
       GITHUB_APP_ID: ${GITHUB_APP_ID:?set the GitHub App ID}
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?set the installation ID}
       GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem

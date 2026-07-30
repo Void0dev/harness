@@ -192,6 +192,15 @@ class ProductContractTest(unittest.TestCase):
                 self.assertNotIn("void-ai-api-key", worker)
                 self.assertIn("void-ai-api-key:\n    content: ${VOID_AI_API_KEY:?", compose)
 
+        for relative in (
+            "coolify/docker-compose.yml",
+            "skills/deploy-issue-harness-agent/assets/coolify-agent-compose.yml",
+        ):
+            with self.subTest(production_compose=relative):
+                compose = (ROOT / relative).read_text()
+                worker = compose.split("  issue-harness:", 1)[1].split("  opencode-web:", 1)[0]
+                self.assertIn("NODE_ENV: production", worker)
+
     def test_secret_scan_covers_fine_grained_github_and_openai_keys(self):
         module = load_module("tests/test_repository_hygiene.py", "product_secret_patterns")
         self.assertTrue(hasattr(module, "SECRET_PATTERNS"))
