@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 
 harden_harness_runtime() {
-  if [[ "$#" -ne 2 ]]; then
-    echo "usage: harden_harness_runtime DATA_DIR OWNER" >&2
+  if [[ "$#" -ne 1 ]]; then
+    echo "usage: harden_harness_runtime DATA_DIR" >&2
     return 2
   fi
 
   local data_dir="$1"
-  local owner="$2"
   local runtime_names=(
     logs
     state
@@ -37,6 +36,4 @@ harden_harness_runtime() {
   done
 
   chmod 0700 "$data_dir" "${runtime_paths[@]}"
-  chown "$owner" "$data_dir" "${runtime_paths[@]}"
-
 }

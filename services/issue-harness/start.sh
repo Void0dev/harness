@@ -10,7 +10,7 @@ if [[ "$data_dir" != "$resolved_data_dir" || "$resolved_data_dir" != /opt/issue-
   echo "HARNESS_DATA_DIR must be a non-symlinked per-repository child of /opt/issue-harness" >&2
   exit 1
 fi
-harden_harness_runtime "$data_dir" "10001:10001"
+harden_harness_runtime "$data_dir"
 
 exec {harness_lock_fd}>"$data_dir/process.lock"
 chmod 600 "$data_dir/process.lock"
@@ -19,4 +19,4 @@ if ! flock -n "$harness_lock_fd"; then
   exit 1
 fi
 
-exec gosu agent npm run start -w services/issue-harness
+exec npm run start -w services/issue-harness

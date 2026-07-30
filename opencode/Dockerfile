@@ -7,8 +7,11 @@ LABEL org.opencontainers.image.source=$SOURCE_REPOSITORY \
 
 RUN npm install -g opencode-ai@1.18.7 \
   && useradd -m -u 10001 opencode \
-  && mkdir -p /home/opencode/.local/share /home/opencode/.local/state \
-  && chown -R opencode:opencode /home/opencode/.local
+  && install -d -o opencode -g opencode -m 0700 \
+    /home/opencode/.local/share \
+    /home/opencode/.local/state \
+    /opt/issue-harness/data/context \
+    /opt/issue-harness/data/runs
 
 COPY opencode/render-config.mjs /opt/opencode/render-config.mjs
 COPY opencode/web-entry.mjs /opt/opencode/web-entry.mjs

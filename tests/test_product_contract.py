@@ -97,7 +97,7 @@ class ProductContractTest(unittest.TestCase):
         web = (ROOT / "opencode/Dockerfile").read_text()
         self.assertIn("sed -i 's/\\r$//'", harness)
         self.assertIn("/home/opencode/.local/state", web)
-        self.assertIn("chown -R opencode:opencode /home/opencode/.local", web)
+        self.assertIn("install -d -o opencode -g opencode -m 0700", web)
 
     def test_local_opencode_project_is_browsable_from_its_home_directory(self):
         dockerfile = (ROOT / "opencode/Dockerfile").read_text()
@@ -127,6 +127,27 @@ class ProductContractTest(unittest.TestCase):
         entry = (ROOT / "opencode/web-entry.mjs").read_text()
         self.assertIn('spawn("opencode", ["serve", "--hostname", "127.0.0.1", "--port", String(upstreamPort)]', entry)
         self.assertNotIn('spawn("opencode", ["web",', entry)
+
+    def test_coolify_harness_runtime_is_non_root_and_isolated(self):
+        compose_path = ROOT / "coolify/harness.production.compose.yml"
+        self.assertTrue(compose_path.is_file())
+        worker = (ROOT / "services/issue-harness/Dockerfile").read_text()
+        start = (ROOT / "services/issue-harness/start.sh").read_text()
+        permissions = (ROOT / "services/issue-harness/runtime_permissions.sh").read_text()
+        compose = compose_path.read_text()
+        self.assertIn("USER agent", worker)
+        self.assertNotIn("gosu", worker)
+        self.assertNotIn("gosu", start)
+        self.assertNotIn("chown", start)
+        self.assertNotIn("chown", permissions)
+        self.assertNotIn("build:", compose)
+        self.assertNotIn("docker.sock", compose)
+        self.assertNotIn("ports:", compose)
+        self.assertIn("cap_drop:\n      - ALL", compose)
+        self.assertIn("harness-context:", compose)
+        self.assertIn("read_only: true", compose)
+        self.assertIn("harness-runs:", compose)
+        self.assertIn("opencode-state:", compose)
 
     def test_secret_scan_covers_fine_grained_github_and_openai_keys(self):
         module = load_module("tests/test_repository_hygiene.py", "product_secret_patterns")
