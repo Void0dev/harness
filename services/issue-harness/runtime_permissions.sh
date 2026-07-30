@@ -11,18 +11,14 @@ harden_harness_runtime() {
   local runtime_names=(
     logs
     state
-    sandboxes
-    workspaces
-    sandcastle
     runs
     artifacts
     publishers
-    docker-certs
+    context
   )
   local runtime_paths=()
   local name
   local runtime_path
-  local certificate
 
   if [[ -L "$data_dir" ]]; then
     echo "Refusing symbolic-link harness data directory" >&2
@@ -43,15 +39,4 @@ harden_harness_runtime() {
   chmod 0700 "$data_dir" "${runtime_paths[@]}"
   chown "$owner" "$data_dir" "${runtime_paths[@]}"
 
-  for certificate in "$data_dir/docker-certs"/*; do
-    if [[ -L "$certificate" ]]; then
-      echo "Refusing symbolic-link Docker TLS certificate" >&2
-      return 1
-    fi
-  done
-
-  while IFS= read -r -d '' certificate; do
-    chmod 0600 "$certificate"
-    chown "$owner" "$certificate"
-  done < <(find "$data_dir/docker-certs" -maxdepth 1 -type f -print0)
 }

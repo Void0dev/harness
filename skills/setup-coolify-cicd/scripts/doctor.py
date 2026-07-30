@@ -83,7 +83,7 @@ def detect(root: pathlib.Path, run_commands: bool) -> dict:
         "root": str(root),
         "stacks": stacks or ["unknown"],
         "lockfiles": lockfiles,
-        "checks": {"config": config_path.exists(), "prompt": (root / ".sandcastle" / "prompt.md").exists()},
+        "checks": {"config": config_path.exists()},
         "commandResults": command_results,
         "commandsVerified": run_commands and not any(item["exitCode"] for item in command_results),
         "contractReady": not errors,

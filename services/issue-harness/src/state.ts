@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { PublicationArtifactReference } from "./artifact.js";
 import { ensurePrivateRuntimeDirectory, fsyncDirectory } from "./security.js";
+import { sanitizeTaskView, type TaskView } from "./task-view.js";
 
 export type StalePublicationArtifact = {
   artifact: PublicationArtifactReference;
@@ -14,8 +15,14 @@ export type IssueRunState = {
   issueNumber: number;
   branch: string;
   status: "running" | "awaiting_human" | "publish_pending" | "finished" | "failed";
+  parentSessionId?: string;
   lastSessionId?: string;
   lastLogPath?: string;
+  workspace?: string;
+  baseSha?: string;
+  awaitingAction?: "resume_child" | "retry_publish" | "rerun";
+  pendingHumanReply?: string;
+  taskView?: TaskView;
   publicationArtifact?: PublicationArtifactReference;
   stalePublicationArtifacts?: StalePublicationArtifact[];
   publishedCommitSha?: string;
@@ -26,7 +33,16 @@ export type IssueRunState = {
 export function nextRunAction(state?: IssueRunState) {
   if (state?.status === "finished" && state.prUrl) return "finalize" as const;
   if (
-    (state?.status === "publish_pending" || state?.status === "finished")
+    state?.pendingHumanReply
+    && state.awaitingAction === "resume_child"
+    && state.lastSessionId
+    && state.workspace
+    && state.baseSha
+  ) return "resume" as const;
+  if (
+    (state?.status === "publish_pending"
+      || state?.status === "finished"
+      || (state?.pendingHumanReply && state.awaitingAction === "retry_publish"))
     && state.publicationArtifact
   ) return "publish" as const;
   return "run" as const;
@@ -55,11 +71,25 @@ export function recoverStalePublication(
     ...rest,
     branch: `${branchPrefix}${suffix}`,
     status: "awaiting_human",
+    awaitingAction: "rerun",
     stalePublicationArtifacts: [
       ...(state.stalePublicationArtifacts ?? []),
       { artifact: publicationArtifact, detectedAt, reason: "base_changed" },
     ],
   };
+}
+
+export function activeRunForParent(states: IssueRunState[], parentSessionId: string) {
+  if (!/^ses_[A-Za-z0-9_-]{8,128}$/.test(parentSessionId)) {
+    throw new Error("Invalid OpenCode parent session ID");
+  }
+  const matches = states
+    .filter((state) => state.parentSessionId === parentSessionId && state.status !== "finished")
+    .sort((left, right) => left.issueNumber - right.issueNumber);
+  if (matches.length > 1) {
+    throw new Error("Multiple unfinished Issues share one OpenCode parent session");
+  }
+  return matches[0];
 }
 
 export class StateStore {
@@ -91,6 +121,14 @@ export class StateStore {
 
   get(issueNumber: number) {
     return this.states.get(issueNumber);
+  }
+
+  all() {
+    return [...this.states.values()].sort((left, right) => left.issueNumber - right.issueNumber);
+  }
+
+  getByParentSession(parentSessionId: string) {
+    return activeRunForParent([...this.states.values()], parentSessionId);
   }
 
   async set(state: Omit<IssueRunState, "updatedAt">) {
@@ -175,5 +213,28 @@ function validateRunState(value: unknown): IssueRunState {
       }
     }
   }
+  for (const sessionId of [state.parentSessionId, state.lastSessionId]) {
+    if (sessionId !== undefined && !/^ses_[A-Za-z0-9_-]{8,128}$/.test(sessionId)) {
+      throw new Error("Invalid OpenCode session ID");
+    }
+  }
+  if (state.workspace !== undefined && (
+    typeof state.workspace !== "string"
+    || !path.isAbsolute(state.workspace)
+    || state.workspace.length > 4_096
+  )) throw new Error("Invalid OpenCode workspace path");
+  if (state.baseSha !== undefined && !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(state.baseSha)) {
+    throw new Error("Invalid base SHA");
+  }
+  if (
+    state.awaitingAction !== undefined
+    && !new Set(["resume_child", "retry_publish", "rerun"]).has(state.awaitingAction)
+  ) throw new Error("Invalid awaiting action");
+  if (state.pendingHumanReply !== undefined && (
+    typeof state.pendingHumanReply !== "string"
+    || state.pendingHumanReply.trim().length === 0
+    || state.pendingHumanReply.length > 16_000
+  )) throw new Error("Invalid pending human reply");
+  if (state.taskView !== undefined) state.taskView = sanitizeTaskView(state.taskView);
   return state as IssueRunState;
 }

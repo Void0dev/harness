@@ -14,4 +14,10 @@ export const labelColors: Record<string, string> = {
   [labels.needsHuman]: "eb5757",
 };
 
-export const statusLabels = [labels.backlog, labels.todo, labels.running, labels.finished];
+export const statusLabels = [
+  labels.backlog,
+  labels.todo,
+  labels.running,
+  labels.finished,
+  labels.needsHuman,
+];

@@ -22,7 +22,7 @@ test("exports a content-addressed patch and path manifest", async (t) => {
   await git(workspace, "add", "existing.txt");
   await git(workspace, "commit", "-m", "base");
   const baseSha = await git(workspace, "rev-parse", "HEAD");
-  await git(workspace, "switch", "-c", "codex/issue-7-change");
+  await git(workspace, "switch", "-c", "opencode/issue-7-change");
   await fs.writeFile(path.join(workspace, "existing.txt"), "after\n");
   await fs.writeFile(path.join(workspace, "new file.txt"), "new\n");
   await git(workspace, "add", ".");
@@ -31,7 +31,7 @@ test("exports a content-addressed patch and path manifest", async (t) => {
   const artifact = await createPublicationArtifact({
     dataDir: path.join(root, "data"),
     issueNumber: 7,
-    branch: "codex/issue-7-change",
+    branch: "opencode/issue-7-change",
     workspace,
     baseSha,
   });
@@ -50,7 +50,7 @@ test("exports a content-addressed patch and path manifest", async (t) => {
   };
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.issueNumber, 7);
-  assert.equal(manifest.branch, "codex/issue-7-change");
+  assert.equal(manifest.branch, "opencode/issue-7-change");
   assert.equal(manifest.baseSha, baseSha);
   assert.match(manifest.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   assert.deepEqual(manifest.paths, ["existing.txt", "new file.txt"]);
@@ -72,7 +72,7 @@ test("rejects a patch that creates a symbolic link", async (t) => {
   await git(workspace, "add", ".");
   await git(workspace, "commit", "-m", "base");
   const baseSha = await git(workspace, "rev-parse", "HEAD");
-  await git(workspace, "switch", "-c", "codex/issue-8-link");
+  await git(workspace, "switch", "-c", "opencode/issue-8-link");
   await fs.symlink("../../outside", path.join(workspace, "escape"));
   await git(workspace, "add", "escape");
   await git(workspace, "commit", "-m", "link");
@@ -81,7 +81,7 @@ test("rejects a patch that creates a symbolic link", async (t) => {
     createPublicationArtifact({
       dataDir: path.join(root, "data"),
       issueNumber: 8,
-      branch: "codex/issue-8-link",
+      branch: "opencode/issue-8-link",
       workspace,
       baseSha,
     }),
@@ -101,7 +101,7 @@ test("rejects a patch containing high-confidence secret material", async (t) => 
   await git(workspace, "add", ".");
   await git(workspace, "commit", "-m", "base");
   const baseSha = await git(workspace, "rev-parse", "HEAD");
-  await git(workspace, "switch", "-c", "codex/issue-9-secret");
+  await git(workspace, "switch", "-c", "opencode/issue-9-secret");
   await fs.writeFile(path.join(workspace, "leak.txt"), `ghp_${"abcdefghijklmnopqrstuvwxyz123456"}\n`);
   await git(workspace, "add", ".");
   await git(workspace, "commit", "-m", "secret");
@@ -110,7 +110,7 @@ test("rejects a patch containing high-confidence secret material", async (t) => 
     createPublicationArtifact({
       dataDir: path.join(root, "data"),
       issueNumber: 9,
-      branch: "codex/issue-9-secret",
+      branch: "opencode/issue-9-secret",
       workspace,
       baseSha,
     }),

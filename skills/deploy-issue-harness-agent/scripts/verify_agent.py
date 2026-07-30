@@ -26,7 +26,7 @@ INVENTORY_FIELDS = set(AGENT_INVENTORY_CONTRACT.fields)
 CANONICAL_SOURCE = "https://github.com/Void0dev/harness"
 IMAGE_PATTERNS = {
     "harnessImage": re.compile(r"^ghcr\.io/void0dev/issue-harness@sha256:[0-9a-f]{64}$"),
-    "sandboxImage": re.compile(r"^ghcr\.io/void0dev/sandcastle-harness@sha256:[0-9a-f]{64}$"),
+    "opencodeWebImage": re.compile(r"^ghcr\.io/void0dev/opencode-web@sha256:[0-9a-f]{64}$"),
 }
 FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 TRUSTED_SOURCE_REF = re.compile(r"^refs/heads/main$")
@@ -389,7 +389,7 @@ def verify_inventory(inventory: object, expected: dict) -> list[str]:
         errors.append("Coolify inventory mismatch: " + ", ".join(mismatches))
     if (
         inventory.get("rolloutHarnessImage") != inventory.get("harnessImage")
-        or inventory.get("rolloutSandboxImage") != inventory.get("sandboxImage")
+        or inventory.get("rolloutOpenCodeWebImage") != inventory.get("opencodeWebImage")
         or inventory.get("rolloutStatus") != "running"
     ):
         errors.append("rollout evidence must show both verified image subjects running")
@@ -403,9 +403,9 @@ def main() -> int:
     parser.add_argument("--health-origin")
     parser.add_argument("--inventory-json", help="fresh non-secret Coolify deployment inventory for online verification")
     parser.add_argument("--harness-manifest", help="downloaded OCI index manifest for the harness image")
-    parser.add_argument("--sandbox-manifest", help="downloaded OCI index manifest for the sandbox image")
+    parser.add_argument("--opencode-web-manifest", help="downloaded OCI index manifest for the OpenCode Web image")
     parser.add_argument("--harness-attestation-bundle", help="downloaded GitHub attestation bundle for the harness image")
-    parser.add_argument("--sandbox-attestation-bundle", help="downloaded GitHub attestation bundle for the sandbox image")
+    parser.add_argument("--opencode-web-attestation-bundle", help="downloaded GitHub attestation bundle for the OpenCode Web image")
     parser.add_argument("--trusted-root", help="fresh GitHub/Sigstore trusted_root.jsonl")
     parser.add_argument(
         "--source-ref",
@@ -430,18 +430,10 @@ def main() -> int:
         errors.append("issueAgent.imageSourceCommit must be a full lowercase Git commit")
     if not isinstance(issue.get("imagePublicationRunId"), str) or not issue["imagePublicationRunId"].isdigit():
         errors.append("issueAgent.imagePublicationRunId must be a GitHub Actions run ID")
-    if not (root / ".sandcastle" / "prompt.md").is_file():
-        errors.append("missing .sandcastle/prompt.md")
     if not (root / ".github" / "ISSUE_TEMPLATE" / "agent-task.yml").is_file():
         errors.append("missing .github/ISSUE_TEMPLATE/agent-task.yml")
-    if issue.get("dedicatedAutomationHost") is not True:
-        errors.append("issueAgent.dedicatedAutomationHost must be true for the sandbox engine")
-    if issue.get("sandboxEngineMode") not in {"rootless-local", "remote-tls"}:
-        errors.append("issueAgent.sandboxEngineMode must be rootless-local or remote-tls")
     if not issue.get("serverUuid"):
         errors.append("issueAgent.serverUuid is required")
-    elif issue.get("serverUuid") == config.get("coolify", {}).get("serverUuid"):
-        errors.append("issueAgent.serverUuid must differ from the application server UUID")
     data_dir = issue.get("dataDir", "")
     data_path = pathlib.PurePosixPath(data_dir)
     if (
@@ -464,7 +456,7 @@ def main() -> int:
                 "applicationUuid": issue.get("applicationUuid"),
                 "serverUuid": issue.get("serverUuid"),
                 "harnessImage": issue.get("harnessImage"),
-                "sandboxImage": issue.get("sandboxImage"),
+                "opencodeWebImage": issue.get("opencodeWebImage"),
                 "dataDir": issue.get("dataDir"),
                 "replicas": 1,
             }
@@ -473,7 +465,7 @@ def main() -> int:
             inventory_verified = not inventory_errors
         provenance_arguments = {
             "harnessImage": (args.harness_manifest, args.harness_attestation_bundle),
-            "sandboxImage": (args.sandbox_manifest, args.sandbox_attestation_bundle),
+            "opencodeWebImage": (args.opencode_web_manifest, args.opencode_web_attestation_bundle),
         }
         if not args.trusted_root or not args.source_ref or any(
             manifest is None or bundle is None

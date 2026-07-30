@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertAgentRunPublishable, hasHumanAttention } from "../src/completion.js";
+import {
+  assertAgentRunPublishable,
+  hasHumanAttention,
+  humanAttentionQuestion,
+} from "../src/completion.js";
 
 test("refuses a committed run without the completion signal", () => {
   assert.throws(
@@ -38,4 +42,13 @@ test("does not expose raw human-attention contents", () => {
   const moduleSource = hasHumanAttention.toString();
   assert.doesNotMatch(moduleSource, /return\s+match\?\./);
   assert.equal(hasHumanAttention("<human-attention>upstream-secret</human-attention>"), true);
+});
+
+test("extracts a bounded human question for the parent chat", () => {
+  assert.equal(
+    humanAttentionQuestion("before <human-attention> Which database should I use? </human-attention> after"),
+    "Which database should I use?",
+  );
+  assert.equal(humanAttentionQuestion(`<human-attention>${"x".repeat(5_000)}</human-attention>`)?.length, 4_000);
+  assert.equal(humanAttentionQuestion("<human-attention>   </human-attention>"), undefined);
 });

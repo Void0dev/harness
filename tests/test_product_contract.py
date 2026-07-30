@@ -52,6 +52,82 @@ def verification_result(subject: str, source_commit: str, source_ref: str, run_i
 
 
 class ProductContractTest(unittest.TestCase):
+    def test_repository_has_no_legacy_convex_demo_runtime(self):
+        package = (ROOT / "package.json").read_text()
+        compose = (ROOT / "coolify/docker-compose.yml").read_text()
+        self.assertFalse((ROOT / "apps" / "convex-demo").exists())
+        self.assertNotIn("convex-demo", package)
+        self.assertNotIn("convex-demo", compose)
+
+    def test_issue_harness_dockerfile_does_not_embed_a_sandbox_runtime(self):
+        dockerfile = (ROOT / "services/issue-harness/Dockerfile").read_text()
+        self.assertNotIn("docker.io", dockerfile)
+        self.assertNotIn("docker-cli", dockerfile)
+        self.assertNotIn("opencode-ai", dockerfile)
+
+    def test_opencode_child_sessions_replace_sandcastle_and_model_broker(self):
+        package = (ROOT / "services/issue-harness/package.json").read_text()
+        compose = (ROOT / "docker-compose.local.yml").read_text()
+        runner = (ROOT / "services/issue-harness/src/runner.ts").read_text()
+        publication = (ROOT / ".github/workflows/publish-images.yml").read_text()
+        self.assertNotIn("@ai-hero/sandcastle", package)
+        self.assertNotIn("model-broker", compose)
+        self.assertNotIn("SANDBOX_", compose)
+        self.assertNotIn("sandcastle-harness", publication)
+        self.assertNotIn(".sandcastle/Dockerfile", publication)
+        self.assertIn("opencode-web", publication)
+        self.assertIn("opencode/Dockerfile", publication)
+        self.assertIn("client.createChild", runner)
+        self.assertIn("client.continueSession", runner)
+        self.assertIn("parentSessionId", runner)
+
+    def test_harness_progress_uses_one_persistent_web_card(self):
+        client = (ROOT / "services/issue-harness/src/opencode-client.ts").read_text()
+        state = (ROOT / "services/issue-harness/src/state.ts").read_text()
+        web = (ROOT / "opencode/web-entry.mjs").read_text()
+        dockerfile = (ROOT / "opencode/Dockerfile").read_text()
+        self.assertNotIn("appendParentUpdate", client)
+        self.assertIn("taskView", state)
+        self.assertIn("injectHarnessAssets", web)
+        self.assertIn("/__harness/api/tasks", web)
+        self.assertIn("COPY opencode/ui /opt/opencode/ui", dockerfile)
+
+    def test_linux_images_normalize_windows_scripts_and_create_opencode_state(self):
+        harness = (ROOT / "services/issue-harness/Dockerfile").read_text()
+        web = (ROOT / "opencode/Dockerfile").read_text()
+        self.assertIn("sed -i 's/\\r$//'", harness)
+        self.assertIn("/home/opencode/.local/state", web)
+        self.assertIn("chown -R opencode:opencode /home/opencode/.local", web)
+
+    def test_local_opencode_project_is_browsable_from_its_home_directory(self):
+        dockerfile = (ROOT / "opencode/Dockerfile").read_text()
+        compose = (ROOT / "docker-compose.local.yml").read_text()
+        entry = (ROOT / "opencode/web-entry.mjs").read_text()
+        self.assertIn("WORKDIR /home/opencode/workspace", dockerfile)
+        self.assertIn(
+            "./.local-harness/context:/home/opencode/workspace:ro",
+            compose,
+        )
+        self.assertIn('CMD ["node", "/opt/opencode/web-entry.mjs"]', dockerfile)
+        self.assertIn("Buffer.from(projectDirectory, \"utf8\").toString(\"base64url\")", entry)
+        self.assertIn("location: projectRoute", entry)
+
+    def test_opencode_login_uses_a_signed_24_hour_http_only_session(self):
+        auth = (ROOT / "opencode/auth.mjs").read_text()
+        entry = (ROOT / "opencode/web-entry.mjs").read_text()
+        compose = (ROOT / "docker-compose.local.yml").read_text()
+        self.assertIn("HttpOnly", auth)
+        self.assertIn("SameSite=Lax", auth)
+        self.assertIn("86400", entry)
+        self.assertIn("timingSafeEqual", auth)
+        self.assertIn("delete upstreamEnvironment.OPENCODE_SERVER_PASSWORD", entry)
+        self.assertIn("OPENCODE_SESSION_SECRET", compose)
+
+    def test_opencode_uses_headless_server_without_opening_a_browser(self):
+        entry = (ROOT / "opencode/web-entry.mjs").read_text()
+        self.assertIn('spawn("opencode", ["serve", "--hostname", "127.0.0.1", "--port", String(upstreamPort)]', entry)
+        self.assertNotIn('spawn("opencode", ["web",', entry)
+
     def test_secret_scan_covers_fine_grained_github_and_openai_keys(self):
         module = load_module("tests/test_repository_hygiene.py", "product_secret_patterns")
         self.assertTrue(hasattr(module, "SECRET_PATTERNS"))
@@ -78,14 +154,14 @@ class ProductContractTest(unittest.TestCase):
             "applicationUuid": "agent-app",
             "serverUuid": "automation-server",
             "harnessImage": "ghcr.io/void0dev/issue-harness@sha256:" + "a" * 64,
-            "sandboxImage": "ghcr.io/void0dev/sandcastle-harness@sha256:" + "b" * 64,
+            "opencodeWebImage": "ghcr.io/void0dev/opencode-web@sha256:" + "b" * 64,
             "dataDir": "/opt/issue-harness/acme-service",
             "replicas": 1,
             "rolloutHarnessImage": "ghcr.io/void0dev/issue-harness@sha256:" + "a" * 64,
-            "rolloutSandboxImage": "ghcr.io/void0dev/sandcastle-harness@sha256:" + "b" * 64,
+            "rolloutOpenCodeWebImage": "ghcr.io/void0dev/opencode-web@sha256:" + "b" * 64,
             "rolloutStatus": "running",
             "harnessProvenanceVerified": True,
-            "sandboxProvenanceVerified": True,
+            "opencodeWebProvenanceVerified": True,
         }
 
         errors = contract.validate(forged)
@@ -358,9 +434,8 @@ class ProductContractTest(unittest.TestCase):
 
     def test_every_dockerfile_base_stage_is_digest_pinned(self):
         dockerfiles = (
-            ROOT / ".sandcastle" / "Dockerfile",
             ROOT / "services" / "issue-harness" / "Dockerfile",
-            ROOT / "apps" / "convex-demo" / "Dockerfile",
+            ROOT / "opencode" / "Dockerfile",
         )
         for dockerfile in dockerfiles:
             for line in dockerfile.read_text().splitlines():
@@ -438,7 +513,7 @@ class ProductContractTest(unittest.TestCase):
             hybrid_input.write_text(json.dumps(hybrid_values))
             generated = subprocess.run(
                 [
-                    "python3",
+                    sys.executable,
                     str(ROOT / "skills/setup-coolify-cicd/scripts/generate_inventory_fixture.py"),
                     "--profile",
                     "hybrid",
@@ -464,18 +539,18 @@ class ProductContractTest(unittest.TestCase):
                 "applicationUuid": "agent-app",
                 "serverUuid": "automation-server",
                 "harnessImage": "ghcr.io/void0dev/issue-harness@sha256:" + "a" * 64,
-                "sandboxImage": "ghcr.io/void0dev/sandcastle-harness@sha256:" + "b" * 64,
+                "opencodeWebImage": "ghcr.io/void0dev/opencode-web@sha256:" + "b" * 64,
                 "dataDir": "/opt/issue-harness/acme-service",
                 "replicas": 1,
                 "rolloutHarnessImage": "ghcr.io/void0dev/issue-harness@sha256:" + "a" * 64,
-                "rolloutSandboxImage": "ghcr.io/void0dev/sandcastle-harness@sha256:" + "b" * 64,
+                "rolloutOpenCodeWebImage": "ghcr.io/void0dev/opencode-web@sha256:" + "b" * 64,
                 "rolloutStatus": "running",
             }
             agent_input = root / "agent-values.json"
             agent_input.write_text(json.dumps(agent_values))
             generated_agent = subprocess.run(
                 [
-                    "python3",
+                    sys.executable,
                     str(ROOT / "skills/deploy-issue-harness-agent/scripts/generate_agent_inventory_fixture.py"),
                     "--values-json",
                     str(agent_input),
@@ -514,7 +589,7 @@ class ProductContractTest(unittest.TestCase):
                 for marker in markers:
                     self.assertIn(marker, payload)
 
-    def test_product_docs_match_broker_publisher_compiler_and_inventory_contracts(self):
+    def test_product_docs_match_opencode_publisher_compiler_and_inventory_contracts(self):
         readme = (ROOT / "README.md").read_text()
         deploy_skill = (ROOT / "skills/deploy-issue-harness-agent/SKILL.md").read_text()
         agent_contract = (
@@ -527,7 +602,6 @@ class ProductContractTest(unittest.TestCase):
         readiness = (
             ROOT / "skills/setup-coolify-cicd/references/readiness-contract.md"
         ).read_text()
-        demo_boundary = (ROOT / "apps/convex-demo/DEMO_BOUNDARY.md").read_text()
 
         for stale in (
             "Host Docker socket",
@@ -538,7 +612,7 @@ class ProductContractTest(unittest.TestCase):
             "Listener push'ит ветку",
         ):
             self.assertNotIn(stale, readme)
-        self.assertIn("broker", readme.lower())
+        self.assertNotIn("broker jwt", readme.lower())
         self.assertIn("content-addressed", readme)
         self.assertIn("trusted publisher", readme)
         self.assertIn("npm run lint", readme)
@@ -547,8 +621,8 @@ class ProductContractTest(unittest.TestCase):
         self.assertIn("generate_agent_inventory_fixture.py", readme)
 
         for document in (deploy_skill, agent_contract):
-            self.assertIn("CODEX_AUTH_MODE=broker", document)
-            self.assertIn("SANDBOX_NETWORK", document)
+            self.assertNotIn("OPENCODE_AUTH_MODE=broker", document)
+            self.assertNotIn("SANDBOX_NETWORK", document)
             self.assertIn("trusted publisher", document)
         for flag in (
             "--bundle",
@@ -574,10 +648,6 @@ class ProductContractTest(unittest.TestCase):
         self.assertIn("schema v2", readiness.lower())
         self.assertNotIn("issue-agent rollout/provenance evidence", readiness)
 
-        self.assertIn("permanent", demo_boundary)
-        self.assertIn("disposable demo data", demo_boundary)
-        self.assertNotIn("each disposable", demo_boundary)
-
         for fragment in ("convex-delivery-jobs.yml", "nest-migration-jobs.yml"):
             text = (ROOT / "skills/setup-coolify-cicd/assets" / fragment).read_text()
             self.assertIn("internal", text)
@@ -597,7 +667,7 @@ class ProductContractTest(unittest.TestCase):
         }
         combined = "\n".join(documents.values())
         for required in (
-            "five canonical workflows",
+            "six canonical workflows",
             "runId",
             "artifactId",
             "GitHub attestation",

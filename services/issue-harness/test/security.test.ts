@@ -4,14 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  assertNoRepositoryEnvironmentPassthrough,
   assertNoHighConfidenceSecrets,
   acquireProcessLock,
   ensureRuntimeIdentity,
   redactForGithub,
   publicHarnessStatus,
-  withSanitizedProcessEnvironment,
-  sandboxControlEnvironment,
   ensurePrivateRuntimeDirectory,
 } from "../src/security.js";
 
@@ -65,47 +62,10 @@ test("rejects exact and high-confidence credentials before publication", () => {
   );
 });
 
-test("removes secret-shaped outer environment variables only for the sandbox operation", async () => {
-  process.env.HARNESS_TEST_TOKEN = "secret";
-  process.env.HARNESS_TEST_SAFE = "visible";
-  await withSanitizedProcessEnvironment(async () => {
-    assert.equal(process.env.HARNESS_TEST_TOKEN, undefined);
-    assert.equal(process.env.HARNESS_TEST_SAFE, "visible");
-  });
-  assert.equal(process.env.HARNESS_TEST_TOKEN, "secret");
-  delete process.env.HARNESS_TEST_TOKEN;
-  delete process.env.HARNESS_TEST_SAFE;
-});
-
-test("rejects repository-controlled Sandcastle environment passthrough", async (t) => {
-  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "harness-security-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
-  await fs.mkdir(path.join(workspace, ".sandcastle"));
-  await fs.writeFile(path.join(workspace, ".sandcastle", ".env"), "GITHUB_TOKEN\n");
-  await assert.rejects(assertNoRepositoryEnvironmentPassthrough(workspace), /environment pass-through/);
-});
-
-test("does not pass outer Docker control into the coding sandbox", () => {
-  process.env.DOCKER_HOST = "unix:///var/run/docker.sock";
-  process.env.DOCKER_TLS_VERIFY = "1";
-  process.env.DOCKER_CERT_PATH = "/host/certs";
-  try {
-    assert.deepEqual(sandboxControlEnvironment(), {
-      DOCKER_HOST: "",
-      DOCKER_TLS_VERIFY: "",
-      DOCKER_CERT_PATH: "",
-    });
-  } finally {
-    delete process.env.DOCKER_HOST;
-    delete process.env.DOCKER_TLS_VERIFY;
-    delete process.env.DOCKER_CERT_PATH;
-  }
-});
-
 test("creates and repairs agent runtime directories with owner-only permissions", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "harness-runtime-permissions-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const directory = path.join(root, "codex");
+  const directory = path.join(root, "opencode");
   await fs.mkdir(directory, { recursive: true, mode: 0o755 });
   await fs.chmod(directory, 0o755);
 

@@ -1,59 +1,65 @@
 services:
-  convex-demo:
-    build:
-      context: ..
-      dockerfile: apps/convex-demo/Dockerfile
-      args:
-        VITE_CONVEX_URL: ${VITE_CONVEX_URL:?set the public Convex deployment URL before building}
-    ports:
-      - "4173:4173"
-
   issue-harness:
     build:
       context: ..
       dockerfile: services/issue-harness/Dockerfile
     environment:
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_OWNER: ${GITHUB_OWNER}
-      GITHUB_REPO: ${GITHUB_REPO}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?set the GitHub App ID}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?set the installation ID}
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+      GITHUB_OWNER: ${GITHUB_OWNER:?set owner}
+      GITHUB_REPO: ${GITHUB_REPO:?set repository}
       GITHUB_BASE_BRANCH: ${GITHUB_BASE_BRANCH:-stage}
-      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
-      HEALTH_PORT: 3000
-      HARNESS_HEALTH_DETAILS_TOKEN: ${HARNESS_HEALTH_DETAILS_TOKEN:?set a dedicated 32+ character health-details bearer token}
-      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-1}
-      CODEX_AUTH_MODE: broker
-      CODEX_BROKER_URL: ${CODEX_BROKER_URL:?set the internal OpenAI-compatible broker /v1 URL}
-      CODEX_BROKER_AUDIENCE: ${CODEX_BROKER_AUDIENCE:-codex-broker}
-      CODEX_BROKER_SIGNING_SECRET: ${CODEX_BROKER_SIGNING_SECRET:?set a 32+ character broker signing secret}
-      CODEX_BROKER_TOKEN_TTL_SECONDS: ${CODEX_BROKER_TOKEN_TTL_SECONDS:-1800}
-      CODEX_MODEL: ${CODEX_MODEL:-gpt-5.4}
-      CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-high}
-      SANDCASTLE_IMAGE: ${SANDCASTLE_IMAGE:-sandcastle-harness:0.1.0}
-      SANDBOX_NETWORK: ${SANDBOX_NETWORK:?set a pre-created internal Docker network shared only with the broker}
-      SANDBOX_MEMORY_MB: ${SANDBOX_MEMORY_MB:-4096}
-      SANDBOX_CPUS: ${SANDBOX_CPUS:-2}
-      SANDBOX_PIDS_LIMIT: ${SANDBOX_PIDS_LIMIT:-256}
-      SANDBOX_TMPFS_MB: ${SANDBOX_TMPFS_MB:-256}
-      SANDBOX_MAX_OUTPUT_BYTES: ${SANDBOX_MAX_OUTPUT_BYTES:-4194304}
-      SANDCASTLE_BUILD_LOCAL: ${SANDCASTLE_BUILD_LOCAL:-true}
-      SANDBOX_REGISTRY_SERVER: ${SANDBOX_REGISTRY_SERVER:-}
-      SANDBOX_REGISTRY_USERNAME: ${SANDBOX_REGISTRY_USERNAME:-}
-      SANDBOX_REGISTRY_TOKEN: ${SANDBOX_REGISTRY_TOKEN:-}
-      HARNESS_DATA_DIR: ${HARNESS_DATA_DIR:-/opt/issue-harness/void0dev-harness}
-      DOCKER_HOST: unix:///run/sandbox-engine/docker.sock
-      SANDBOX_DOCKER_SOCKET_PATH: /run/sandbox-engine/docker.sock
-      SANDBOX_DOCKER_DAEMON_ID: ${SANDBOX_DOCKER_DAEMON_ID:?set the expected rootless Docker daemon ID}
-      DOCKER_TLS_VERIFY: ""
-      DOCKER_CERT_PATH: ""
+      HARNESS_COMMAND_TOKEN: ${HARNESS_COMMAND_TOKEN:?set command token}
+      HARNESS_HEALTH_DETAILS_TOKEN: ${HARNESS_HEALTH_DETAILS_TOKEN:?set health token}
+      HARNESS_DATA_DIR: ${HARNESS_DATA_DIR:?set data directory}
+      WORKSPACE_RETENTION_HOURS: ${WORKSPACE_RETENTION_HOURS:-24}
+      MAX_CONCURRENT_RUNS: 1
+      OPENCODE_SERVER_URL: http://opencode-web:4096
+      OPENCODE_INTERNAL_TOKEN: ${OPENCODE_INTERNAL_TOKEN:?set internal token}
+      OPENCODE_PARENT_DIRECTORY: /home/opencode/workspace
+      OPENCODE_MODEL_ID: ${VOID_AI_MODEL_ID:?set model ID}
     volumes:
-      - ${HARNESS_DATA_DIR:-/opt/issue-harness/void0dev-harness}:${HARNESS_DATA_DIR:-/opt/issue-harness/void0dev-harness}
-      - ${SANDBOX_DOCKER_SOCKET:?set the dedicated rootless Docker socket}:/run/sandbox-engine/docker.sock
-    expose:
-      - "3000"
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://127.0.0.1:3000/live"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+      - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}:${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}
+      - ${GITHUB_APP_PRIVATE_KEY_HOST_PATH:?set the GitHub App private key path}:/run/secrets/github-app.pem:ro
+    init: true
+    cpus: ${HARNESS_CPU_LIMIT:-0.5}
+    mem_limit: ${HARNESS_MEMORY_LIMIT:-512m}
+    pids_limit: ${HARNESS_PIDS_LIMIT:-128}
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  opencode-web:
+    build:
+      context: ..
+      dockerfile: opencode/Dockerfile
+    environment:
+      OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-opencode}
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?set OpenCode password}
+      OPENCODE_INTERNAL_TOKEN: ${OPENCODE_INTERNAL_TOKEN:?set internal token}
+      VOID_AI_BASE_URL: ${VOID_AI_BASE_URL:-https://ai-gateway.void0.org/v1}
+      VOID_AI_API_KEY: ${VOID_AI_API_KEY:?set gateway key}
+      VOID_AI_MODEL_ID: ${VOID_AI_MODEL_ID:?set model ID}
+      OPENCODE_SESSION_SECRET: ${OPENCODE_SESSION_SECRET:?set session signing secret}
+      OPENCODE_SESSION_TTL_SECONDS: ${OPENCODE_SESSION_TTL_SECONDS:-86400}
+      OPENCODE_PROJECT_DIR: /home/opencode/workspace
+      HARNESS_COMMAND_URL: http://issue-harness:3000/commands/issues
+      HARNESS_ANSWER_URL: http://issue-harness:3000/commands/answers
+      HARNESS_TASKS_URL: http://issue-harness:3000/ui/tasks
+      HARNESS_COMMAND_TOKEN: ${HARNESS_COMMAND_TOKEN:?set command token}
+    volumes:
+      - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/opencode:/home/opencode/.local/share/opencode
+      - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/context:/home/opencode/workspace:ro
+      - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/runs:${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/runs
+    init: true
+    cpus: ${OPENCODE_CPU_LIMIT:-2}
+    mem_limit: ${OPENCODE_MEMORY_LIMIT:-4g}
+    pids_limit: ${OPENCODE_PIDS_LIMIT:-512}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "4096:4096"
     restart: unless-stopped

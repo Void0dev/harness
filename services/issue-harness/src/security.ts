@@ -54,7 +54,6 @@ export function redactForGithub(value: string, configuredSecrets: Array<string |
     .replace(/((?:api[_-]?key|access[_-]?token|oauth[_-]?token|client[_-]?secret|password)\s*[:=]\s*)["']?[A-Za-z0-9_./+=-]{20,}["']?/gi, "$1[REDACTED]")
     .replace(/(authorization:\s*(?:bearer|basic)\s+)[^\s]+/gi, "$1[REDACTED]");
 }
-
 export function publicHarnessStatus(kind: keyof typeof publicStatuses) {
   return JSON.stringify(publicStatuses[kind]);
 }
@@ -76,25 +75,6 @@ export function assertNoHighConfidenceSecrets(
   })) {
     throw new Error("Publication artifact contains credential material");
   }
-}
-
-export async function assertNoRepositoryEnvironmentPassthrough(workspace: string) {
-  const envFile = path.join(workspace, ".sandcastle", ".env");
-  try {
-    await fs.access(envFile);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
-  throw new Error("Refusing repository-controlled .sandcastle/.env environment pass-through");
-}
-
-export function sandboxControlEnvironment() {
-  return {
-    DOCKER_HOST: "",
-    DOCKER_TLS_VERIFY: "",
-    DOCKER_CERT_PATH: "",
-  };
 }
 
 export async function ensurePrivateRuntimeDirectory(directory: string) {
@@ -247,20 +227,5 @@ async function lockMatches(lockPath: string, expected: string) {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
-  }
-}
-
-export async function withSanitizedProcessEnvironment<T>(operation: () => Promise<T>): Promise<T> {
-  const removed = new Map<string, string>();
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && /(?:^|_)(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY)$/.test(key)) {
-      removed.set(key, value);
-      delete process.env[key];
-    }
-  }
-  try {
-    return await operation();
-  } finally {
-    for (const [key, value] of removed) process.env[key] = value;
   }
 }

@@ -3,10 +3,10 @@
   "applicationUuid": null,
   "serverUuid": null,
   "harnessImage": null,
-  "sandboxImage": null,
+  "opencodeWebImage": null,
   "dataDir": null,
   "replicas": 1,
   "rolloutHarnessImage": null,
-  "rolloutSandboxImage": null,
+  "rolloutOpenCodeWebImage": null,
   "rolloutStatus": "running"
 }

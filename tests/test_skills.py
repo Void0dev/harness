@@ -8,6 +8,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -76,11 +77,11 @@ def agent_inventory(issue):
         "applicationUuid": issue["applicationUuid"],
         "serverUuid": issue["serverUuid"],
         "harnessImage": issue["harnessImage"],
-        "sandboxImage": issue["sandboxImage"],
+        "opencodeWebImage": issue["opencodeWebImage"],
         "dataDir": issue["dataDir"],
         "replicas": 1,
         "rolloutHarnessImage": issue["harnessImage"],
-        "rolloutSandboxImage": issue["sandboxImage"],
+        "rolloutOpenCodeWebImage": issue["opencodeWebImage"],
         "rolloutStatus": "running",
         "observedAt": observed.isoformat(),
         "expiresAt": (observed + datetime.timedelta(minutes=10)).isoformat(),
@@ -104,7 +105,7 @@ def install_fake_attestation_materials(root):
     issue = payload["issueAgent"]
     manifests = {
         "harness": b'{"kind":"oci-index","image":"harness"}\n',
-        "sandbox": b'{"kind":"oci-index","image":"sandbox"}\n',
+        "opencode": b'{"kind":"oci-index","image":"opencode"}\n',
     }
     paths = {}
     results = {}
@@ -112,12 +113,12 @@ def install_fake_attestation_materials(root):
         manifest = root / f"{name}-manifest.json"
         manifest.write_bytes(content)
         paths[f"{name}Manifest"] = manifest
-        image_name = "issue-harness" if name == "harness" else "sandcastle-harness"
+        image_name = "issue-harness" if name == "harness" else "opencode-web"
         subject = (
             f"ghcr.io/void0dev/{image_name}@sha256:"
             + hashlib.sha256(content).hexdigest()
         )
-        issue[f"{name}Image" if name == "harness" else "sandboxImage"] = subject
+        issue[f"{name}Image" if name == "harness" else "opencodeWebImage"] = subject
         bundle = root / f"{name}-attestation.jsonl"
         bundle.write_text("signed bundle fixture")
         paths[f"{name}Bundle"] = bundle
@@ -159,16 +160,16 @@ def install_fake_attestation_materials(root):
         "IFS= read -r artifact < \"$3\"\n"
         f"case \"$artifact\" in\n"
         f"  *'\"image\":\"harness\"'*) printf '%s' {shlex.quote(json.dumps(results['harness']))} ;;\n"
-        f"  *'\"image\":\"sandbox\"'*) printf '%s' {shlex.quote(json.dumps(results['sandbox']))} ;;\n"
+        f"  *'\"image\":\"opencode\"'*) printf '%s' {shlex.quote(json.dumps(results['opencode']))} ;;\n"
         "  *) exit 2 ;;\n"
         "esac\n"
     )
     fake_gh.chmod(0o755)
     arguments = [
         "--harness-manifest", paths["harnessManifest"],
-        "--sandbox-manifest", paths["sandboxManifest"],
+        "--opencode-web-manifest", paths["opencodeManifest"],
         "--harness-attestation-bundle", paths["harnessBundle"],
-        "--sandbox-attestation-bundle", paths["sandboxBundle"],
+        "--opencode-web-attestation-bundle", paths["opencodeBundle"],
         "--trusted-root", trusted_root,
         "--source-ref", "refs/heads/main",
     ]
@@ -177,7 +178,7 @@ def install_fake_attestation_materials(root):
 
 def run_script(relative, *args, env=None):
     return subprocess.run(
-        ["python3", str(ROOT / relative), *map(str, args)],
+        [sys.executable, str(ROOT / relative), *map(str, args)],
         text=True,
         capture_output=True,
         env=env,
@@ -204,12 +205,11 @@ def config():
         "issueAgent": {
             "applicationUuid": "app-agent", "baseBranch": "stage",
             "harnessImage": "ghcr.io/void0dev/issue-harness@sha256:" + "a" * 64,
-            "sandboxImage": "ghcr.io/void0dev/sandcastle-harness@sha256:" + "b" * 64,
+            "opencodeWebImage": "ghcr.io/void0dev/opencode-web@sha256:" + "b" * 64,
             "imageSourceRepository": "https://github.com/Void0dev/harness",
             "imageSourceCommit": "c" * 40,
             "imagePublicationRunId": "123456789",
             "serverUuid": "automation-server", "dataDir": "/opt/issue-harness/acme-service",
-            "dedicatedAutomationHost": True, "sandboxEngineMode": "rootless-local",
             "maxConcurrentRuns": 1, "replicas": 1,
         },
     }
@@ -811,14 +811,14 @@ class SkillScriptsTest(unittest.TestCase):
         package_root = root / "standalone-deploy-skill"
         shutil.copytree(ROOT / "skills" / "deploy-issue-harness-agent", package_root)
         agent = subprocess.run(
-            ["python3", str(package_root / "scripts" / "verify_agent.py"), str(root), "--offline"],
+            [sys.executable, str(package_root / "scripts" / "verify_agent.py"), str(root), "--offline"],
             text=True,
             capture_output=True,
             cwd=root,
             env={**os.environ, "PYTHONPATH": ""},
         )
         diagnostics = subprocess.run(
-            ["python3", str(package_root / "scripts" / "verify_diagnostics.py"), "--help"],
+            [sys.executable, str(package_root / "scripts" / "verify_diagnostics.py"), "--help"],
             text=True,
             capture_output=True,
             cwd=root,
@@ -859,7 +859,7 @@ class SkillScriptsTest(unittest.TestCase):
         for mutate in (
             lambda payload: payload.update({"source": "coolify-ui"}),
             lambda payload: payload.update({"expiresAt": "2000-01-01T00:00:00+00:00"}),
-            lambda payload: payload.update({"sandboxProvenanceVerified": True}),
+            lambda payload: payload.update({"opencodeWebProvenanceVerified": True}),
         ):
             with self.subTest(mutate=mutate):
                 candidate = json.loads(json.dumps(agent_inventory(issue)))
@@ -995,12 +995,16 @@ class SkillScriptsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     module.normalize_config(payload)
 
-    def test_repository_exposes_exactly_two_installable_skills(self):
+    def test_repository_exposes_the_three_installable_harness_skills(self):
         skill_names = sorted(
             path.name for path in (ROOT / "skills").iterdir()
             if path.is_dir() and (path / "SKILL.md").is_file()
         )
-        self.assertEqual(skill_names, ["deploy-issue-harness-agent", "setup-coolify-cicd"])
+        self.assertEqual(skill_names, [
+            "deploy-issue-harness-agent",
+            "deploy-opencode-harness",
+            "setup-coolify-cicd",
+        ])
 
         project_skill = ROOT / "skills" / "setup-coolify-cicd"
         for relative in (
@@ -1042,7 +1046,112 @@ class SkillScriptsTest(unittest.TestCase):
         release_contract = (harness_skill / "references" / "image-release.md").read_text()
         self.assertIn("https://github.com/Void0dev/harness", release_contract)
         self.assertIn("ghcr.io/void0dev/issue-harness@sha256:", release_contract)
-        self.assertIn("ghcr.io/void0dev/sandcastle-harness@sha256:", release_contract)
+        self.assertIn("ghcr.io/void0dev/opencode-web@sha256:", release_contract)
+
+        addon_skill = ROOT / "skills" / "deploy-opencode-harness"
+        self.assertTrue((addon_skill / "SKILL.md").is_file())
+
+    def test_installation_skills_use_opencode_and_bind_existing_target_resources(self):
+        setup = (ROOT / "skills/setup-coolify-cicd/SKILL.md").read_text()
+        agent = (ROOT / "skills/deploy-issue-harness-agent/SKILL.md").read_text()
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+
+        self.assertIn("Never create `stage` or `main`", setup)
+        self.assertIn("Never create or deploy the target Coolify application", setup)
+        self.assertNotIn("Create `stage` from `main`", setup)
+        self.assertNotIn("Create or bind separate Coolify", setup)
+
+        for document in (agent, addon):
+            self.assertIn("OpenCode Web", document)
+            self.assertNotIn("OPENCODE_AUTH_MODE=broker", document)
+            self.assertNotIn("SANDBOX_NETWORK", document)
+            self.assertNotIn("CODEX_", document)
+        self.assertRegex(addon, r"Issue .+ session .+ branch .+ PR")
+
+    def test_addon_skill_uses_one_time_profile_and_never_requests_pem_contents(self):
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        profile = (ROOT / "skills/deploy-opencode-harness/references/developer-profile.md").read_text()
+        self.assertIn("coolify_environment_url", addon)
+        self.assertNotIn("coolify_production_url", addon)
+        self.assertIn("local path to the downloaded private-key .pem file", addon)
+        self.assertIn("Never ask the user to paste PEM contents", addon)
+        self.assertIn("GITHUB_APP_INSTALLATION_ID", addon)
+        self.assertIn("per-project GitHub App", addon)
+        self.assertIn("Never ask the user for model URL, model ID, or model key", profile)
+
+    def test_addon_skill_derives_the_only_app_repository_and_uses_coolify_generated_domain(self):
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        profile = (ROOT / "skills/deploy-opencode-harness/references/developer-profile.md").read_text()
+        for field in (
+            "coolify_environment_url",
+            "coolify_token_env_path",
+            "github_app_id",
+            "pem_path",
+            "chat_login",
+            "chat_password",
+        ):
+            self.assertIn(field, addon)
+        self.assertIn("Generate Domain", addon)
+        self.assertIn("Coolify-generated HTTPS URL", addon)
+        self.assertIn("exactly one repository", addon)
+        self.assertNotIn("repo_url:", addon)
+        self.assertIn("Do not request approval while collecting these six values", addon)
+
+    def test_addon_skill_selects_coolify_server_and_destination_without_reading_target_resources(self):
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        profile = (ROOT / "skills/deploy-opencode-harness/references/developer-profile.md").read_text()
+        self.assertIn("GET /api/v1/servers", addon)
+        self.assertIn("GET /api/v1/servers/{server_uuid}/destinations", addon)
+        self.assertIn("If exactly one usable server", addon)
+        self.assertIn("If exactly one destination", addon)
+        self.assertIn("Never call the environment-details endpoint", addon)
+        self.assertNotIn("derive its HTTPS API origin and Project/environment identifiers", addon)
+        self.assertNotIn("wildcard DNS", addon)
+        self.assertNotIn("*.harness.example.com", profile)
+        self.assertNotIn("h-<repository>-<hash8>.<base-domain>", profile)
+        self.assertNotIn("chat_domain:", addon)
+
+    def test_addon_skill_keeps_coolify_api_access_in_a_local_operator_profile(self):
+        profile = (ROOT / "skills/deploy-opencode-harness/references/developer-profile.md").read_text()
+        self.assertIn("COOLIFY_TOKEN", profile)
+        self.assertIn("read, write, and deploy", profile)
+        self.assertIn("Never paste the token into chat", profile)
+        self.assertNotIn("COOLIFY_URL=", profile)
+
+    def test_addon_skill_requires_per_action_approval_and_only_touches_harness_resources(self):
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        self.assertIn("Before every read or write", addon)
+        self.assertIn("approve <number>", addon)
+        self.assertIn("Never call DELETE", addon)
+        self.assertIn("Never read, modify, deploy, restart, or inspect target application resources", addon)
+        self.assertIn("created in this installation", addon)
+
+    def test_harness_runtime_uses_only_github_app_credentials(self):
+        runtime_files = [
+            ROOT / ".env.example",
+            ROOT / ".env.local.example",
+            ROOT / "docker-compose.local.yml",
+            ROOT / "coolify/docker-compose.yml",
+            ROOT / "skills/deploy-issue-harness-agent/assets/coolify-agent-compose.yml",
+            ROOT / "skills/deploy-issue-harness-agent/references/agent-contract.md",
+            ROOT / "skills/deploy-issue-harness-agent/SKILL.md",
+            ROOT / "skills/deploy-opencode-harness/SKILL.md",
+        ]
+        for path in runtime_files:
+            content = path.read_text()
+            self.assertNotIn("GITHUB_TOKEN", content, str(path))
+            self.assertIn("GITHUB_APP_ID", content, str(path))
+            self.assertIn("GITHUB_APP_INSTALLATION_ID", content, str(path))
+
+        for relative in (
+            "docker-compose.local.yml",
+            "coolify/docker-compose.yml",
+            "skills/deploy-issue-harness-agent/assets/coolify-agent-compose.yml",
+        ):
+            compose = (ROOT / relative).read_text()
+            self.assertIn("GITHUB_APP_PRIVATE_KEY_PATH", compose)
+            self.assertIn("HARNESS_COMMAND_TOKEN", compose)
+            self.assertRegex(compose, r"github-app[^\n]*:ro")
 
     def fixture(self):
         temporary = tempfile.TemporaryDirectory()
@@ -1062,8 +1171,6 @@ class SkillScriptsTest(unittest.TestCase):
         (root / "package-lock.json").write_text("{}")
         (root / "Dockerfile").write_text("FROM scratch\n")
         (root / ".env.example").write_text("DATABASE_URL=\n")
-        (root / ".sandcastle").mkdir()
-        (root / ".sandcastle" / "prompt.md").write_text("prompt\n")
         (root / ".github" / "ISSUE_TEMPLATE").mkdir(parents=True)
         (root / ".github" / "ISSUE_TEMPLATE" / "agent-task.yml").write_text("name: Agent task\n")
         (root / ".github" / "workflows").mkdir()
@@ -2062,7 +2169,6 @@ class SkillScriptsTest(unittest.TestCase):
         deploy_helper = ROOT / "skills/setup-coolify-cicd/assets/deploy_exact_revision.py"
         client_helper = ROOT / "skills/setup-coolify-cicd/assets/coolify_client.py"
         compose = (ROOT / "skills/deploy-issue-harness-agent/assets/coolify-agent-compose.yml").read_text()
-        remote_compose = (ROOT / "skills/deploy-issue-harness-agent/assets/coolify-agent-compose.remote.yml").read_text()
         self.assertTrue(deploy_helper.is_file())
         self.assertTrue(client_helper.is_file())
         self.assertEqual(workflow.count("python3 .harness/deploy_exact_revision.py"), 2)
@@ -2077,11 +2183,8 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertIn("${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}:${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}", compose)
         self.assertNotIn("harness-data:/data", compose)
         self.assertNotIn("/var/run/docker.sock", compose)
-        self.assertIn("${SANDBOX_DOCKER_SOCKET:?set the dedicated rootless Docker socket}", compose)
-        self.assertIn("DOCKER_HOST: unix:///run/sandbox-engine/docker.sock", compose)
-        self.assertNotIn("docker.sock", remote_compose)
-        self.assertIn("DOCKER_TLS_VERIFY: \"1\"", remote_compose)
-        self.assertIn("SANDBOX_DOCKER_HOST", remote_compose)
+        self.assertNotIn("SANDBOX_", compose)
+        self.assertIn("OPENCODE_WEB_IMAGE", compose)
         self.assertIn("__HARNESS_CONVEX_DEPLOY_STAGE__", (ROOT / "skills/setup-coolify-cicd/assets/convex-delivery-jobs.yml").read_text())
         self.assertIn("__HARNESS_MIGRATE_PRODUCTION__", (ROOT / "skills/setup-coolify-cicd/assets/nest-migration-jobs.yml").read_text())
 
@@ -2128,7 +2231,7 @@ class SkillScriptsTest(unittest.TestCase):
             workflow.index("Validate trusted publication ref"),
             workflow.index("uses: actions/checkout@"),
         )
-        for dockerfile in (ROOT / "services/issue-harness/Dockerfile", ROOT / ".sandcastle/Dockerfile"):
+        for dockerfile in (ROOT / "services/issue-harness/Dockerfile", ROOT / "opencode/Dockerfile"):
             with self.subTest(dockerfile=dockerfile):
                 text = dockerfile.read_text()
                 self.assertIn("org.opencontainers.image.source", text)
@@ -2413,33 +2516,27 @@ class SkillScriptsTest(unittest.TestCase):
         agent = run_script("skills/deploy-issue-harness-agent/scripts/verify_agent.py", root, "--offline")
         self.assertEqual(agent.returncode, 0, agent.stderr + agent.stdout)
 
-    def test_agent_validator_rejects_missing_repository_assets_and_unsafe_host(self):
+    def test_agent_validator_rejects_missing_repository_assets(self):
         temporary, root = self.fixture()
         self.addCleanup(temporary.cleanup)
-        (root / ".sandcastle" / "prompt.md").unlink()
         (root / ".github" / "ISSUE_TEMPLATE" / "agent-task.yml").unlink()
         payload = config()
-        payload["issueAgent"]["dedicatedAutomationHost"] = False
         (root / ".harness" / "config.json").write_text(json.dumps(payload))
         result = run_script("skills/deploy-issue-harness-agent/scripts/verify_agent.py", root, "--offline")
         self.assertEqual(result.returncode, 1, result.stderr + result.stdout)
         report = json.loads(result.stdout)
-        self.assertTrue(any("prompt.md" in error for error in report["errors"]))
         self.assertTrue(any("agent-task.yml" in error for error in report["errors"]))
-        self.assertTrue(any("dedicatedAutomationHost" in error for error in report["errors"]))
 
-    def test_agent_validator_rejects_latest_and_shared_host(self):
+    def test_agent_validator_rejects_floating_opencode_image(self):
         temporary, root = self.fixture()
         self.addCleanup(temporary.cleanup)
         payload = config()
-        payload["issueAgent"]["sandboxImage"] = "sandbox:latest"
-        payload["issueAgent"]["dedicatedAutomationHost"] = False
+        payload["issueAgent"]["opencodeWebImage"] = "opencode-web:latest"
         (root / ".harness" / "config.json").write_text(json.dumps(payload))
         result = run_script("skills/deploy-issue-harness-agent/scripts/verify_agent.py", root, "--offline")
         self.assertEqual(result.returncode, 1)
         report = json.loads(result.stdout)
         self.assertTrue(any("sha256" in item for item in report["errors"]))
-        self.assertTrue(any("dedicatedAutomationHost" in item for item in report["errors"]))
 
     def test_agent_validator_rejects_forked_image_coordinates_even_with_a_digest(self):
         temporary, root = self.fixture()
@@ -2461,7 +2558,7 @@ class SkillScriptsTest(unittest.TestCase):
             "applicationUuid": issue["applicationUuid"],
             "serverUuid": issue["serverUuid"],
             "harnessImage": issue["harnessImage"],
-            "sandboxImage": issue["sandboxImage"],
+            "opencodeWebImage": issue["opencodeWebImage"],
             "dataDir": issue["dataDir"],
             "replicas": 1,
         }
@@ -2469,21 +2566,11 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertEqual(module.verify_inventory(inventory, expected), [])
 
         forged = json.loads(json.dumps(inventory))
-        forged["sandboxProvenanceVerified"] = True
+        forged["opencodeWebProvenanceVerified"] = True
         self.assertTrue(any("unsupported fields" in error for error in module.verify_inventory(forged, expected)))
         wrong_rollout = json.loads(json.dumps(inventory))
         wrong_rollout["rolloutHarnessImage"] = "ghcr.io/void0dev/issue-harness@sha256:" + "e" * 64
         self.assertTrue(any("rollout" in error for error in module.verify_inventory(wrong_rollout, expected)))
-
-    def test_agent_validator_rejects_rootful_sandbox_engine_mode(self):
-        temporary, root = self.fixture()
-        self.addCleanup(temporary.cleanup)
-        payload = config()
-        payload["issueAgent"]["sandboxEngineMode"] = "rootful-host-socket"
-        (root / ".harness" / "config.json").write_text(json.dumps(payload))
-        result = run_script("skills/deploy-issue-harness-agent/scripts/verify_agent.py", root, "--offline")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("sandboxEngineMode", result.stdout)
 
     def test_agent_validator_rejects_shared_data_root(self):
         temporary, root = self.fixture()

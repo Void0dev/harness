@@ -12,9 +12,7 @@ dist
 .convex
 .harness
 .omx
-.sandcastle/*
-!.sandcastle/Dockerfile
-!.sandcastle/prompt.md
+.sandcastle
 *.log
 **/*.log
 *.key

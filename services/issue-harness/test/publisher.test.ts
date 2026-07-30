@@ -20,14 +20,14 @@ test("publishes a validated artifact from a fresh hook-isolated clone", async (t
     remoteUrl: fixture.remote,
     baseBranch: "stage",
   });
-  await git(execution.workspace, "switch", "-c", "codex/issue-21-safe-change");
+  await git(execution.workspace, "switch", "-c", "opencode/issue-21-safe-change");
   await fs.writeFile(path.join(execution.workspace, "version.txt"), "v2\n");
   await git(execution.workspace, "add", "version.txt");
   await git(execution.workspace, "commit", "-m", "attacker controlled message");
   const artifact = await createPublicationArtifact({
     dataDir: path.join(fixture.root, "data"),
     issueNumber: 21,
-    branch: "codex/issue-21-safe-change",
+    branch: "opencode/issue-21-safe-change",
     workspace: execution.workspace,
     baseSha: execution.baseSha,
   });
@@ -54,7 +54,7 @@ test("publishes a validated artifact from a fresh hook-isolated clone", async (t
     remoteUrl: fixture.remote,
     baseBranch: "stage",
     issueNumber: 21,
-    branch: "codex/issue-21-safe-change",
+    branch: "opencode/issue-21-safe-change",
     artifact,
   });
   const retry = await publishArtifact({
@@ -62,18 +62,18 @@ test("publishes a validated artifact from a fresh hook-isolated clone", async (t
     remoteUrl: fixture.remote,
     baseBranch: "stage",
     issueNumber: 21,
-    branch: "codex/issue-21-safe-change",
+    branch: "opencode/issue-21-safe-change",
     artifact,
   });
 
   assert.match(result.commitSha, /^[0-9a-f]{40}$/);
   assert.equal(retry.commitSha, result.commitSha);
   assert.equal(
-    await gitBare(fixture.remote, "rev-parse", "refs/heads/codex/issue-21-safe-change"),
+    await gitBare(fixture.remote, "rev-parse", "refs/heads/opencode/issue-21-safe-change"),
     result.commitSha,
   );
   const inspection = path.join(fixture.root, "inspection");
-  await git(fixture.root, "clone", "--branch", "codex/issue-21-safe-change", fixture.remote, inspection);
+  await git(fixture.root, "clone", "--branch", "opencode/issue-21-safe-change", fixture.remote, inspection);
   assert.equal(await fs.readFile(path.join(inspection, "version.txt"), "utf8"), "v2\n");
   assert.equal(await git(inspection, "log", "-1", "--pretty=%s"), "Automated harness change for issue #21");
   await assert.rejects(fs.access(hookSentinel));
@@ -89,14 +89,14 @@ test("reports a changed base as a typed stale-artifact failure", async (t) => {
     remoteUrl: fixture.remote,
     baseBranch: "stage",
   });
-  await git(execution.workspace, "switch", "-c", "codex/issue-22-stale");
+  await git(execution.workspace, "switch", "-c", "opencode/issue-22-stale");
   await fs.writeFile(path.join(execution.workspace, "version.txt"), "agent-change\n");
   await git(execution.workspace, "add", "version.txt");
   await git(execution.workspace, "commit", "-m", "agent change");
   const artifact = await createPublicationArtifact({
     dataDir,
     issueNumber: 22,
-    branch: "codex/issue-22-stale",
+    branch: "opencode/issue-22-stale",
     workspace: execution.workspace,
     baseSha: execution.baseSha,
   });
@@ -112,7 +112,7 @@ test("reports a changed base as a typed stale-artifact failure", async (t) => {
       remoteUrl: fixture.remote,
       baseBranch: "stage",
       issueNumber: 22,
-      branch: "codex/issue-22-stale",
+      branch: "opencode/issue-22-stale",
       artifact,
     }),
     (error) => error instanceof StalePublicationArtifactError
