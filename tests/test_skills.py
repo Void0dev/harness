@@ -1129,7 +1129,6 @@ class SkillScriptsTest(unittest.TestCase):
     def test_harness_runtime_uses_only_github_app_credentials(self):
         runtime_files = [
             ROOT / ".env.example",
-            ROOT / ".env.local.example",
             ROOT / "docker-compose.local.yml",
             ROOT / "coolify/docker-compose.yml",
             ROOT / "skills/deploy-issue-harness-agent/assets/coolify-agent-compose.yml",

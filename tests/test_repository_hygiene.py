@@ -183,7 +183,7 @@ class RepositoryHygieneTest(unittest.TestCase):
                     "-c",
                     (
                         "source services/issue-harness/runtime_permissions.sh; "
-                        'harden_harness_runtime "$1" "$(id -u):$(id -g)"'
+                        'harden_harness_runtime "$1"'
                     ),
                     "runtime-permissions-test",
                     str(data_dir),
@@ -216,7 +216,7 @@ class RepositoryHygieneTest(unittest.TestCase):
                     "-c",
                     (
                         "source services/issue-harness/runtime_permissions.sh; "
-                        'harden_harness_runtime "$1" "$(id -u):$(id -g)"'
+                        'harden_harness_runtime "$1"'
                     ),
                     "runtime-permissions-test",
                     str(data_dir),
