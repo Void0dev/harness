@@ -1091,11 +1091,20 @@ class SkillScriptsTest(unittest.TestCase):
             "chat_password",
         ):
             self.assertIn(field, addon)
-        self.assertIn("Generate Domain", addon)
-        self.assertIn("Coolify-generated HTTPS URL", addon)
+        self.assertIn("Before asking for the six fields", addon)
+        self.assertIn("`main` and `stage`", addon)
+        self.assertIn("Metadata - read-only", addon)
+        self.assertIn("Contents, Issues, Pull requests - read and write", addon)
+        self.assertIn("Administration", addon)
+        self.assertIn("C:\\harness-secrets", addon)
+        self.assertIn("one message", addon)
+        self.assertIn("SERVICE_FQDN_OPENCODE_WEB_4096: /", addon)
+        self.assertIn("Coolify-generated URL", addon)
         self.assertIn("exactly one repository", addon)
         self.assertNotIn("repo_url:", addon)
         self.assertIn("Do not request approval while collecting these six values", addon)
+        self.assertIn("Do not use a `Generate Domain` action", addon)
+        self.assertIn("SERVICE_FQDN_OPENCODE_WEB_4096", profile)
 
     def test_addon_skill_selects_coolify_server_and_destination_without_reading_target_resources(self):
         addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
@@ -1128,11 +1137,16 @@ class SkillScriptsTest(unittest.TestCase):
 
     def test_addon_skill_renders_the_web_only_model_key_config_for_coolify_beta_470(self):
         addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        compose = (ROOT / "coolify/harness.production.compose.yml").read_text()
 
         self.assertIn("__VOID_AI_API_KEY_AT_DEPLOY__", addon)
         self.assertIn("replace the marker only in memory", addon)
         self.assertIn("Never store `VOID_AI_API_KEY` as a Service environment variable", addon)
         self.assertIn("docker_compose_raw", addon)
+        self.assertIn("SERVICE_FQDN_OPENCODE_WEB_4096: /", compose)
+        self.assertIn("PATCH /api/v1/services/{harness_uuid}", addon)
+        self.assertIn("POST /api/v1/services/{harness_uuid}/restart?latest=true", addon)
+        self.assertIn("Do not call `/deploy`", addon)
 
     def test_harness_runtime_uses_only_github_app_credentials(self):
         runtime_files = [
