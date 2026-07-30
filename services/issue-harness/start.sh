@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/runtime_permissions.sh"
+source "$script_dir/github_app_secret.sh"
 
 data_dir="${HARNESS_DATA_DIR:-/opt/issue-harness/default}"
 resolved_data_dir="$(realpath -m "$data_dir")"
@@ -19,4 +20,17 @@ if ! flock -n "$harness_lock_fd"; then
   exit 1
 fi
 
-exec npm run start -w services/issue-harness
+prepare_github_app_private_key
+trap cleanup_github_app_private_key EXIT
+
+npm run start -w services/issue-harness &
+worker_pid=$!
+
+stop_worker() {
+  kill -TERM "$worker_pid" 2>/dev/null || true
+  wait "$worker_pid" || true
+  exit 143
+}
+trap stop_worker TERM INT
+
+wait "$worker_pid"
