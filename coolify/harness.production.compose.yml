@@ -3,6 +3,10 @@
 # both images locally. No GitHub Packages registry or Coolify GitHub App is used.
 # Coolify supplies GITHUB_APP_PRIVATE_KEY only while Docker Compose creates the
 # github-app-pem secret. Docker then mounts it read-only in issue-harness only.
+# Deployment automation replaces the marker in the top-level config only in
+# memory before sending Compose to Coolify. Do not set VOID_AI_API_KEY as a
+# Coolify Service environment variable: beta.470 exposes Service variables to
+# every container in the Compose resource.
 
 services:
   issue-harness:
@@ -112,5 +116,7 @@ secrets:
     environment: GITHUB_APP_PRIVATE_KEY_BASE64
 
 configs:
+  # Replaced in memory by the deployment skill. Never commit a real key here.
   void-ai-api-key:
-    content: ${VOID_AI_API_KEY:?set the Void AI gateway key}
+    content: |
+      __VOID_AI_API_KEY_AT_DEPLOY__
