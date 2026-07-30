@@ -35,7 +35,7 @@ services:
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?set OpenCode password}
       OPENCODE_INTERNAL_TOKEN: ${OPENCODE_INTERNAL_TOKEN:?set internal token}
       VOID_AI_BASE_URL: ${VOID_AI_BASE_URL:-https://ai-gateway.void0.org/v1}
-      VOID_AI_API_KEY: ${VOID_AI_API_KEY:?set gateway key}
+      VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key
       VOID_AI_MODEL_ID: ${VOID_AI_MODEL_ID:?set model ID}
       OPENCODE_SESSION_SECRET: ${OPENCODE_SESSION_SECRET:?set session signing secret}
       OPENCODE_SESSION_TTL_SECONDS: ${OPENCODE_SESSION_TTL_SECONDS:-86400}
@@ -44,6 +44,9 @@ services:
       HARNESS_ANSWER_URL: http://issue-harness:3000/commands/answers
       HARNESS_TASKS_URL: http://issue-harness:3000/ui/tasks
       HARNESS_COMMAND_TOKEN: ${HARNESS_COMMAND_TOKEN:?set command token}
+    configs:
+      - source: void-ai-api-key
+        target: /run/secrets/void-ai-api-key
     volumes:
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/opencode:/home/opencode/.local/share/opencode
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/context:/home/opencode/workspace:ro
@@ -57,3 +60,7 @@ services:
     cap_drop:
       - ALL
     restart: unless-stopped
+
+configs:
+  void-ai-api-key:
+    content: ${VOID_AI_API_KEY:?set gateway key}
