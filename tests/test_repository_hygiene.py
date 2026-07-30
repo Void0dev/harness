@@ -1,3 +1,4 @@
+import base64
 import pathlib
 import re
 import stat
@@ -201,6 +202,35 @@ class RepositoryHygieneTest(unittest.TestCase):
                 with self.subTest(directory=relative):
                     mode = stat.S_IMODE((data_dir / relative).stat().st_mode)
                     self.assertEqual(mode, 0o700)
+
+    @unittest.skipIf(os.name == "nt", "Unix permission semantics are verified on Linux")
+    def test_base64_github_app_secret_becomes_private_temporary_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            secret_file = pathlib.Path(temporary) / "github-app.pem.b64"
+            secret_file.write_text(base64.b64encode(b"test-github-app-key\n").decode())
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    (
+                        "source services/issue-harness/github_app_secret.sh; "
+                        "GITHUB_APP_PRIVATE_KEY_BASE64_PATH=\"$1\"; "
+                        "prepare_github_app_private_key; "
+                        "key_path=\"$GITHUB_APP_PRIVATE_KEY_PATH\"; "
+                        "test \"$(cat \"$key_path\")\" = test-github-app-key; "
+                        "test \"$(stat -c %a \"$key_path\")\" = 600; "
+                        "cleanup_github_app_private_key; "
+                        "test ! -e \"$key_path\""
+                    ),
+                    "github-app-secret-test",
+                    str(secret_file),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
     @unittest.skipIf(os.name == "nt", "Creating symlinks requires extra Windows privileges")
     def test_runtime_hardening_rejects_symlinked_runtime_directory(self):
         with tempfile.TemporaryDirectory() as temporary:

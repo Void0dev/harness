@@ -1,17 +1,20 @@
 # This file is for one new Coolify Service named "harness" only.
-# HARNESS_IMAGE and OPENCODE_WEB_IMAGE must be immutable digests from one trusted
-# successful Publish harness images workflow run on refs/heads/main.
-# After this Service is created, the installer attaches the GitHub App PEM as a
-# Coolify secret file mount at /run/secrets/github-app.pem in issue-harness only.
+# Coolify's Docker daemon clones the public Harness repository at main and builds
+# both images locally. No GitHub Packages registry or Coolify GitHub App is used.
+# Coolify supplies GITHUB_APP_PRIVATE_KEY only while Docker Compose creates the
+# github-app-pem secret. Docker then mounts it read-only in issue-harness only.
 
 services:
   issue-harness:
-    image: ${HARNESS_IMAGE:?set an immutable ghcr.io/void0dev/issue-harness digest}
+    build:
+      context: https://github.com/Void0dev/harness.git#main
+      dockerfile: services/issue-harness/Dockerfile
     user: "10001:10001"
     environment:
       GITHUB_APP_ID: ${GITHUB_APP_ID:?set the GitHub App ID}
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?set the GitHub App installation ID}
       GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+      GITHUB_APP_PRIVATE_KEY_BASE64_PATH: /run/secrets/github-app.pem.b64
       GITHUB_OWNER: ${GITHUB_OWNER:?set the repository owner}
       GITHUB_REPO: ${GITHUB_REPO:?set the repository name}
       GITHUB_BASE_BRANCH: stage
@@ -37,6 +40,10 @@ services:
       - type: volume
         source: harness-runs
         target: /opt/issue-harness/data/runs
+    secrets:
+      - source: github-app-pem
+        target: github-app.pem.b64
+        mode: 0444
     init: true
     cpus: ${HARNESS_CPU_LIMIT:-0.5}
     mem_limit: ${HARNESS_MEMORY_LIMIT:-512m}
@@ -48,7 +55,9 @@ services:
     restart: unless-stopped
 
   opencode-web:
-    image: ${OPENCODE_WEB_IMAGE:?set an immutable ghcr.io/void0dev/opencode-web digest}
+    build:
+      context: https://github.com/Void0dev/harness.git#main
+      dockerfile: opencode/Dockerfile
     user: "10001:10001"
     environment:
       OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-opencode}
@@ -93,3 +102,7 @@ volumes:
   harness-context:
   harness-runs:
   opencode-state:
+
+secrets:
+  github-app-pem:
+    environment: GITHUB_APP_PRIVATE_KEY_BASE64
