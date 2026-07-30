@@ -59,10 +59,23 @@ The only permitted Coolify write sequence is: create one Harness Compose resourc
 4. Create or reference the Coolify secret file mount `/run/secrets/github-app.pem` from `pem_path`. Mount it read-only only into `issue-harness`. If secure file-mount creation is unavailable, pause for the operator to upload that local file in Coolify; never use a repository file or environment-variable PEM.
 5. Store the supplied `chat_login` and `chat_password` as the OpenCode Web credentials. Generate only internal 32+ character command, session, and diagnostics secrets; never display them.
 6. Pin `GITHUB_BASE_BRANCH=stage`, `MAX_CONCURRENT_RUNS=1`, no public worker port, `no-new-privileges`, and the fixed deployment defaults. Do not add target production credentials to Harness.
-7. Use `$deploy-issue-harness-agent` for the runtime contract and deployment verification. Do not create `stage` or `main`, or deploy the target application.
+7. On Coolify beta.470, render the model-gateway key into the web-only Compose config, not a Service environment variable:
+   - The repository template contains exactly one marker: `__VOID_AI_API_KEY_AT_DEPLOY__`, in top-level `configs.void-ai-api-key.content`. That config is mounted only at `/run/secrets/void-ai-api-key` in `opencode-web`.
+   - Never store `VOID_AI_API_KEY` as a Service environment variable.
+   - Read the operator's already-local Harness model-key source only after its own approved action; never print, upload to Git, or obtain it by reading a Coolify environment-variable response.
+   - Before Base64 encoding `docker_compose_raw`, replace the marker only in memory with the local key. Require exactly one marker before replacement and zero afterwards. Do not write the rendered Compose to disk or show it in a command, response, diff, log, or chat.
+   - This uses the known-working Docker Compose `configs` mechanism, needs no Coolify file-storage API call, and mounts the real key only into `opencode-web` without manual server access.
+8. Use `$deploy-issue-harness-agent` for the runtime contract and deployment verification. Do not create `stage` or `main`, or deploy the target application.
 
 ## Acceptance check
 
 Verify that normal chat reads refreshed `stage` context without editing it; `/issue` creates the parent-marked Issue; the worker creates a child session in an isolated checkout; and the trusted publisher opens `opencode/issue-*` as a draft PR into `stage`. Prove the full Issue → child session → branch → PR flow. Return the Coolify-generated HTTPS URL, Issue URL, and PR URL. Never return credentials, PEM data, model keys, Coolify tokens, or generated secrets.
 
 Sandcastle and model-broker are not part of this architecture.
+
+## Coolify beta.470 API compatibility
+
+- Replace a Harness Compose only with `PATCH /api/v1/services/{harness_uuid}` and JSON field `docker_compose_raw`, containing Base64 of the exact UTF-8 Compose source. Do not send raw YAML.
+- Rebuild only Harness with `POST /api/v1/services/{harness_uuid}/restart?latest=true`.
+- Do not call `/deploy`; that route returns `404` on this beta version.
+- Do not use the environment variable editor for the model key. Render the web-only config marker in memory before sending `docker_compose_raw`.

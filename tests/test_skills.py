@@ -1126,6 +1126,14 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertIn("Never read, modify, deploy, restart, or inspect target application resources", addon)
         self.assertIn("created in this installation", addon)
 
+    def test_addon_skill_renders_the_web_only_model_key_config_for_coolify_beta_470(self):
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+
+        self.assertIn("__VOID_AI_API_KEY_AT_DEPLOY__", addon)
+        self.assertIn("replace the marker only in memory", addon)
+        self.assertIn("Never store `VOID_AI_API_KEY` as a Service environment variable", addon)
+        self.assertIn("docker_compose_raw", addon)
+
     def test_harness_runtime_uses_only_github_app_credentials(self):
         runtime_files = [
             ROOT / ".env.example",

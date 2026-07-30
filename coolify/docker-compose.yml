@@ -69,5 +69,7 @@ services:
     restart: unless-stopped
 
 configs:
+  # Replaced in memory by the deployment skill. Never commit a real key here.
   void-ai-api-key:
-    content: ${VOID_AI_API_KEY:?set gateway key}
+    content: |
+      __VOID_AI_API_KEY_AT_DEPLOY__
