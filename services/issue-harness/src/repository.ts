@@ -6,6 +6,7 @@ import { ensurePrivateRuntimeDirectory } from "./security.js";
 
 const execFileAsync = promisify(execFile);
 const githubName = /^[A-Za-z0-9_.-]+$/;
+const gitBranch = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,239}$/;
 
 export type IsolatedExecutionWorkspaceOptions = {
   dataDir: string;
@@ -64,8 +65,8 @@ export async function prepareIsolatedExecutionWorkspace(
   );
   await isolatedGit(workspace, undefined, "remote", "remove", "origin");
   await isolatedGit(workspace, undefined, "config", "core.hooksPath", "/dev/null");
-  await isolatedGit(workspace, undefined, "config", "user.name", "Codex Harness");
-  await isolatedGit(workspace, undefined, "config", "user.email", "codex-harness@users.noreply.github.com");
+  await isolatedGit(workspace, undefined, "config", "user.name", "OpenCode Harness");
+  await isolatedGit(workspace, undefined, "config", "user.email", "opencode-harness@users.noreply.github.com");
   const baseSha = await isolatedGit(workspace, undefined, "rev-parse", "HEAD");
   return { workspace, baseSha };
 }
@@ -77,6 +78,13 @@ export async function branchHasCommits(
 ) {
   const count = await isolatedGit(workspace, undefined, "rev-list", "--count", `${baseRef}..${branch}`);
   return Number.parseInt(count, 10) > 0;
+}
+
+export async function createExecutionBranch(workspace: string, branch: string) {
+  if (!gitBranch.test(branch) || branch.includes("..") || branch.includes("//") || branch.endsWith("/")) {
+    throw new Error(`Invalid execution branch: ${branch}`);
+  }
+  await isolatedGit(workspace, undefined, "switch", "-c", branch);
 }
 
 function assertSafeName(label: string, value: string) {

@@ -1,5 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { buildIssueRequest } from "./issue-command.js";
+import { sanitizeTaskView, type TaskView } from "./task-view.js";
 
 type HealthServerOptions = {
   port: number;
@@ -11,6 +13,12 @@ type HealthServerOptions = {
   workerHeartbeatStaleAfterMs?: number;
   healthDetailsToken?: string;
   now?: () => number;
+  commandToken?: string;
+  getBlockingIssue?: (parentSessionId: string) => Promise<{ number: number } | null>;
+  createIssue?: (request: ReturnType<typeof buildIssueRequest>) => Promise<{ number: number; url: string }>;
+  submitHumanAnswer?: (request: { text: string; parentSessionId: string }) => Promise<{ issueNumber: number } | null>;
+  submitRetry?: (request: { parentSessionId: string; instruction?: string }) => Promise<{ issueNumber: number } | null>;
+  getTaskViews?: (parentSessionId: string) => Promise<TaskView[]>;
 };
 
 export const WORKER_HEALTH_SCHEMA_VERSION = 1 as const;
@@ -66,7 +74,25 @@ function workerHeartbeat(options: HealthServerOptions): WorkerHeartbeat {
 }
 
 export async function startHealthServer(options: HealthServerOptions): Promise<Server> {
+  const pendingIssueParents = new Set<string>();
   const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url ?? "/", "http://harness.local");
+    if (request.method === "POST" && request.url === "/commands/issues") {
+      void handleIssueCommand(request, response, options, pendingIssueParents);
+      return;
+    }
+    if (request.method === "POST" && request.url === "/commands/answers") {
+      void handleAnswerCommand(request, response, options);
+      return;
+    }
+    if (request.method === "POST" && request.url === "/commands/retries") {
+      void handleRetryCommand(request, response, options);
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/ui/tasks") {
+      void handleTaskViews(request, response, options, requestUrl);
+      return;
+    }
     if (request.method !== "GET") {
       response.writeHead(404).end();
       return;
@@ -136,4 +162,203 @@ export async function startHealthServer(options: HealthServerOptions): Promise<S
     });
   });
   return server;
+}
+
+async function handleTaskViews(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: HealthServerOptions,
+  requestUrl: URL,
+) {
+  if (!options.commandToken || !options.getTaskViews) {
+    response.writeHead(404).end();
+    return;
+  }
+  if (!bearerTokenMatches(request.headers.authorization, options.commandToken)) {
+    response.writeHead(401, { "www-authenticate": "Bearer" }).end();
+    return;
+  }
+  const parentSessionId = requestUrl.searchParams.get("parentSessionId") ?? "";
+  if (!/^ses_[A-Za-z0-9_-]{8,128}$/.test(parentSessionId)) {
+    json(response, 400, { error: "invalid-parent-session" });
+    return;
+  }
+  try {
+    const tasks = (await options.getTaskViews(parentSessionId)).map(sanitizeTaskView);
+    json(response, 200, { tasks });
+  } catch {
+    json(response, 503, { error: "task-view-unavailable" });
+  }
+}
+
+async function handleAnswerCommand(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: HealthServerOptions,
+) {
+  if (!options.commandToken || !options.submitHumanAnswer) {
+    response.writeHead(404).end();
+    return;
+  }
+  if (!bearerTokenMatches(request.headers.authorization, options.commandToken)) {
+    response.writeHead(401, { "www-authenticate": "Bearer" }).end();
+    return;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await readBoundedBody(request, 64 * 1024));
+  } catch {
+    json(response, 400, { error: "invalid-request" });
+    return;
+  }
+  const input = payload as { text?: unknown; parentSessionId?: unknown };
+  const text = typeof input?.text === "string" ? input.text.trim() : "";
+  const parentSessionId = typeof input?.parentSessionId === "string" ? input.parentSessionId : "";
+  if (
+    !text
+    || text.length > 16_000
+    || !/^ses_[A-Za-z0-9_-]{8,128}$/.test(parentSessionId)
+  ) {
+    json(response, 400, { error: "invalid-request" });
+    return;
+  }
+  try {
+    const result = await options.submitHumanAnswer({ text, parentSessionId });
+    if (!result) {
+      response.writeHead(204).end();
+      return;
+    }
+    json(response, 202, result);
+  } catch {
+    json(response, 503, { error: "answer-queue-failed" });
+  }
+}
+
+async function handleRetryCommand(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: HealthServerOptions,
+) {
+  if (!options.commandToken || !options.submitRetry) {
+    response.writeHead(404).end();
+    return;
+  }
+  if (!bearerTokenMatches(request.headers.authorization, options.commandToken)) {
+    response.writeHead(401, { "www-authenticate": "Bearer" }).end();
+    return;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await readBoundedBody(request, 64 * 1024));
+  } catch {
+    json(response, 400, { error: "invalid-request" });
+    return;
+  }
+  const input = payload as { parentSessionId?: unknown; instruction?: unknown };
+  const parentSessionId = typeof input?.parentSessionId === "string"
+    ? input.parentSessionId
+    : "";
+  const instruction = typeof input?.instruction === "string" ? input.instruction.trim() : "";
+  if (
+    !/^ses_[A-Za-z0-9_-]{8,128}$/.test(parentSessionId)
+    || instruction.length > 16_000
+    || (input?.instruction !== undefined && typeof input.instruction !== "string")
+  ) {
+    json(response, 400, { error: "invalid-request" });
+    return;
+  }
+  try {
+    const result = await options.submitRetry({
+      parentSessionId,
+      ...(instruction ? { instruction } : {}),
+    });
+    if (!result) {
+      response.writeHead(204).end();
+      return;
+    }
+    json(response, 202, result);
+  } catch {
+    json(response, 503, { error: "retry-queue-failed" });
+  }
+}
+
+async function handleIssueCommand(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: HealthServerOptions,
+  pendingIssueParents: Set<string>,
+) {
+  if (!options.commandToken || !options.createIssue) {
+    response.writeHead(404).end();
+    return;
+  }
+  if (!bearerTokenMatches(request.headers.authorization, options.commandToken)) {
+    response.writeHead(401, { "www-authenticate": "Bearer" }).end();
+    return;
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await readBoundedBody(request, 64 * 1024));
+  } catch (error) {
+    const tooLarge = (error as Error).message === "request body too large";
+    json(response, tooLarge ? 413 : 400, { error: tooLarge ? "request-too-large" : "invalid-request" });
+    return;
+  }
+
+  if (!payload || typeof payload !== "object") {
+    json(response, 400, { error: "invalid-request" });
+    return;
+  }
+  const input = payload as { text?: unknown; parentSessionId?: unknown };
+  let issueRequest: ReturnType<typeof buildIssueRequest>;
+  try {
+    issueRequest = buildIssueRequest({
+      text: typeof input.text === "string" ? input.text : "",
+      parentSessionId: typeof input.parentSessionId === "string" ? input.parentSessionId : "",
+    });
+  } catch {
+    json(response, 400, { error: "invalid-request" });
+    return;
+  }
+
+  const parentSessionId = input.parentSessionId as string;
+  if (pendingIssueParents.has(parentSessionId)) {
+    json(response, 409, { error: "issue-processing-busy" });
+    return;
+  }
+  pendingIssueParents.add(parentSessionId);
+  let checkingQueue = true;
+  try {
+    if (options.getBlockingIssue) {
+      const blockingIssue = await options.getBlockingIssue(parentSessionId);
+      if (blockingIssue) {
+        json(response, 409, {
+          error: "issue-processing-busy",
+          issueNumber: blockingIssue.number,
+        });
+        return;
+      }
+    }
+    checkingQueue = false;
+    json(response, 201, await options.createIssue(issueRequest));
+  } catch {
+    json(response, checkingQueue ? 503 : 502, {
+      error: checkingQueue ? "issue-queue-check-failed" : "github-issue-creation-failed",
+    });
+  } finally {
+    pendingIssueParents.delete(parentSessionId);
+  }
+}
+
+async function readBoundedBody(request: IncomingMessage, maximumBytes: number) {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > maximumBytes) throw new Error("request body too large");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }

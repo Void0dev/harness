@@ -4,6 +4,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+import os
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -40,9 +41,7 @@ class RepositoryHygieneTest(unittest.TestCase):
         required = {
             ".omx",
             ".harness",
-            ".sandcastle/*",
-            "!.sandcastle/Dockerfile",
-            "!.sandcastle/prompt.md",
+            ".sandcastle",
             ".env.*",
             "**/.env",
             "**/.env.*",
@@ -83,9 +82,9 @@ class RepositoryHygieneTest(unittest.TestCase):
             ".harness/artifacts/issue-1.bundle",
             ".harness/publishers/issue-1/lease.json",
             ".harness/docker-certs/key.pem",
-            ".harness/codex/auth.json",
             ".harness/locks/deploy.lock",
             ".omx/state/ultragoal.json",
+            ".sandcastle/legacy.log",
             "credentials/client.key",
             "credentials/client.pem",
             "credentials/client.p12",
@@ -95,9 +94,6 @@ class RepositoryHygieneTest(unittest.TestCase):
             ".docker/config.json",
             "secrets/id_rsa",
             "secrets/id_ed25519",
-            ".sandcastle/logs/issue-1.log",
-            ".sandcastle/worktrees/issue-1/.git",
-            ".sandcastle/sandboxes/issue-1.json",
             ".env.production",
             "services/example/.env.local",
         ]
@@ -115,8 +111,6 @@ class RepositoryHygieneTest(unittest.TestCase):
             ".harness/evidence_ledger.py",
             ".env.example",
             "services/example/.env.example",
-            ".sandcastle/Dockerfile",
-            ".sandcastle/prompt.md",
         ]
 
         for candidate in trackable_paths:
@@ -139,12 +133,6 @@ class RepositoryHygieneTest(unittest.TestCase):
             path = pathlib.PurePosixPath(filename)
             if filename.startswith(".harness/") and filename not in allowed_harness:
                 forbidden.append(filename)
-            if filename.startswith((
-                ".sandcastle/logs/",
-                ".sandcastle/worktrees/",
-                ".sandcastle/sandboxes/",
-            )):
-                forbidden.append(filename)
             if path.name == ".env" or (path.name.startswith(".env.") and path.name != ".env.example"):
                 forbidden.append(filename)
             if path.suffix.lower() in {".key", ".pem", ".p12", ".pfx"}:
@@ -161,7 +149,10 @@ class RepositoryHygieneTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         findings = []
         for filename in (path for path in result.stdout.split("\0") if path):
-            content = (ROOT / filename).read_bytes()
+            candidate = ROOT / filename
+            if not candidate.is_file():
+                continue
+            content = candidate.read_bytes()
             if b"\0" in content:
                 continue
             for label, pattern in SECRET_PATTERNS.items():
@@ -170,17 +161,15 @@ class RepositoryHygieneTest(unittest.TestCase):
 
         self.assertEqual(findings, [])
 
-    def test_runtime_permissions_are_private_and_certificate_files_are_owner_only(self):
+    @unittest.skipIf(os.name == "nt", "Unix permission semantics are verified on Linux")
+    def test_runtime_permissions_are_private(self):
         runtime_directories = [
             "logs",
             "state",
-            "sandboxes",
-            "workspaces",
-            "sandcastle",
             "runs",
             "artifacts",
             "publishers",
-            "docker-certs",
+            "context",
         ]
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = pathlib.Path(temporary) / "repository"
@@ -188,18 +177,13 @@ class RepositoryHygieneTest(unittest.TestCase):
                 directory = data_dir / relative
                 directory.mkdir(parents=True, mode=0o755)
                 directory.chmod(0o755)
-            for certificate in ("ca.pem", "cert.pem", "key.pem"):
-                path = data_dir / "docker-certs" / certificate
-                path.write_text("synthetic test certificate")
-                path.chmod(0o644)
-
             result = subprocess.run(
                 [
                     "bash",
                     "-c",
                     (
                         "source services/issue-harness/runtime_permissions.sh; "
-                        'harden_harness_runtime "$1" "$(id -u):$(id -g)"'
+                        'harden_harness_runtime "$1"'
                     ),
                     "runtime-permissions-test",
                     str(data_dir),
@@ -217,19 +201,14 @@ class RepositoryHygieneTest(unittest.TestCase):
                 with self.subTest(directory=relative):
                     mode = stat.S_IMODE((data_dir / relative).stat().st_mode)
                     self.assertEqual(mode, 0o700)
-            for certificate in ("ca.pem", "cert.pem", "key.pem"):
-                with self.subTest(certificate=certificate):
-                    mode = stat.S_IMODE((data_dir / "docker-certs" / certificate).stat().st_mode)
-                    self.assertEqual(mode, 0o600)
-
-    def test_runtime_hardening_rejects_symlinked_certificate_material(self):
+    @unittest.skipIf(os.name == "nt", "Creating symlinks requires extra Windows privileges")
+    def test_runtime_hardening_rejects_symlinked_runtime_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = pathlib.Path(temporary) / "repository"
-            certificates = data_dir / "docker-certs"
-            certificates.mkdir(parents=True)
-            target = pathlib.Path(temporary) / "outside-key.pem"
-            target.write_text("outside secret")
-            (certificates / "key.pem").symlink_to(target)
+            data_dir.mkdir(parents=True)
+            target = pathlib.Path(temporary) / "outside-context"
+            target.mkdir()
+            (data_dir / "context").symlink_to(target, target_is_directory=True)
 
             result = subprocess.run(
                 [
@@ -237,7 +216,7 @@ class RepositoryHygieneTest(unittest.TestCase):
                     "-c",
                     (
                         "source services/issue-harness/runtime_permissions.sh; "
-                        'harden_harness_runtime "$1" "$(id -u):$(id -g)"'
+                        'harden_harness_runtime "$1"'
                     ),
                     "runtime-permissions-test",
                     str(data_dir),
@@ -250,7 +229,7 @@ class RepositoryHygieneTest(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("symbolic-link", result.stderr)
-            self.assertEqual(target.read_text(), "outside secret")
+            self.assertTrue(target.is_dir())
 
 
 if __name__ == "__main__":

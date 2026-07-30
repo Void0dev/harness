@@ -6,122 +6,52 @@ import test from "node:test";
 
 const execFileAsync = promisify(execFile);
 const serviceRoot = path.resolve(import.meta.dirname, "..");
-const { OPENAI_API_KEY: _ambientOpenAiApiKey, ...cleanProcessEnv } = process.env;
 const baseEnv = {
-  ...cleanProcessEnv,
+  ...process.env,
   INIT_CWD: serviceRoot,
-  GITHUB_TOKEN: "test-token",
+  GITHUB_APP_ID: "12345",
+  GITHUB_APP_INSTALLATION_ID: "67890",
+  GITHUB_APP_PRIVATE_KEY_PATH: path.join(serviceRoot, "test-github-app.pem"),
   GITHUB_OWNER: "acme",
   GITHUB_REPO: "service",
-  CODEX_AUTH_MODE: "broker",
-  CODEX_BROKER_URL: "http://codex-broker:8080/v1",
-  CODEX_BROKER_AUDIENCE: "codex-broker",
-  CODEX_BROKER_SIGNING_SECRET: "s".repeat(32),
-  SANDBOX_NETWORK: "codex-broker-internal",
-  DOCKER_HOST: "unix:///run/sandbox-engine/docker.sock",
-  SANDBOX_DOCKER_DAEMON_ID: "rootless-daemon",
+  HARNESS_COMMAND_TOKEN: "c".repeat(32),
+  OPENCODE_SERVER_URL: "http://opencode-web:4096",
+  OPENCODE_INTERNAL_TOKEN: "t".repeat(32),
+  OPENCODE_PARENT_DIRECTORY: "/home/opencode/workspace",
 };
 
-test("rejects direct Codex auth modes for untrusted execution", async () => {
-  await assert.rejects(
-    execFileAsync(process.execPath, ["--import", "tsx", "--eval", "import('./src/env.ts')"], {
-      cwd: serviceRoot,
-      env: { ...baseEnv, CODEX_AUTH_MODE: "api-key" },
-    }),
-    /direct API-key and subscription modes are forbidden/,
-  );
-});
-
-test("rejects an upstream API key on the harness process", async () => {
-  await assert.rejects(
-    execFileAsync(process.execPath, ["--import", "tsx", "--eval", "import('./src/env.ts')"], {
-      cwd: serviceRoot,
-      env: { ...baseEnv, OPENAI_API_KEY: ["sk", "upstream-secret-that-must-not-enter-sandbox"].join("-") },
-    }),
-    /OPENAI_API_KEY must not be configured/,
-  );
-});
-
-test("rejects the conventional rootful Docker socket before execution", async () => {
-  await assert.rejects(
-    execFileAsync(process.execPath, ["--import", "tsx", "--eval", "import('./src/env.ts')"], {
-      cwd: serviceRoot,
-      env: { ...baseEnv, DOCKER_HOST: "unix:///var/run/docker.sock" },
-    }),
-    /conventional rootful Docker socket is forbidden/,
-  );
-});
-
-test("rejects unbounded sandbox CPU configuration", async () => {
-  await assert.rejects(
-    execFileAsync(process.execPath, ["--import", "tsx", "--eval", "import('./src/env.ts')"], {
-      cwd: serviceRoot,
-      env: { ...baseEnv, SANDBOX_CPUS: "1000" },
-    }),
-    /SANDBOX_CPUS must be between/,
-  );
-});
-
-test("requires the canonical digest coordinate when production pinning is enabled", async () => {
-  await assert.rejects(
-    execFileAsync(process.execPath, ["--import", "tsx", "--eval", "import('./src/env.ts')"], {
-      cwd: serviceRoot,
-      env: {
-        ...baseEnv,
-        REQUIRE_PINNED_IMAGES: "true",
-        SANDCASTLE_IMAGE: "sandbox:dev",
-      },
-    }),
-    /SANDCASTLE_IMAGE must use the canonical image coordinate and lowercase sha256 digest/,
-  );
-});
-
-test("accepts the canonical sandbox digest when production pinning is enabled", async () => {
-  await execFileAsync(process.execPath, ["--import", "tsx", "--eval", "import('./src/env.ts')"], {
+function load(env: NodeJS.ProcessEnv) {
+  return execFileAsync(process.execPath, ["--import", "tsx", "--eval", "import('./src/env.ts')"], {
     cwd: serviceRoot,
-    env: {
-      ...baseEnv,
-      REQUIRE_PINNED_IMAGES: "true",
-      SANDCASTLE_IMAGE: `ghcr.io/void0dev/sandcastle-harness@sha256:${"a".repeat(64)}`,
-    },
+    env,
   });
+}
+
+test("requires valid GitHub App identifiers", async () => {
+  await assert.rejects(load({ ...baseEnv, GITHUB_APP_ID: "0" }), /positive integer/);
+  await assert.rejects(load({ ...baseEnv, GITHUB_APP_INSTALLATION_ID: "bad" }), /positive integer/);
 });
 
-test("rejects a weak configured health-details token", async () => {
-  await assert.rejects(
-    execFileAsync(process.execPath, ["--import", "tsx", "--eval", "import('./src/env.ts')"], {
-      cwd: serviceRoot,
-      env: {
-        ...baseEnv,
-        HARNESS_HEALTH_DETAILS_TOKEN: "too-short",
-      },
-    }),
-    /HARNESS_HEALTH_DETAILS_TOKEN must contain at least 32 characters/,
-  );
+test("requires an absolute GitHub App private-key path", async () => {
+  await assert.rejects(load({ ...baseEnv, GITHUB_APP_PRIVATE_KEY_PATH: "relative.pem" }), /absolute path/);
 });
 
-test("rejects a dangerous harness data root", async () => {
-  await assert.rejects(
-    execFileAsync(process.execPath, ["--import", "tsx", "--eval", "import('./src/env.ts')"], {
-      cwd: serviceRoot,
-      env: {
-        ...baseEnv,
-        HARNESS_DATA_DIR: "/",
-      },
-    }),
-    /HARNESS_DATA_DIR must be a per-repository child of \/opt\/issue-harness/,
-  );
+test("rejects removed PAT and direct model-key configuration", async () => {
+  await assert.rejects(load({ ...baseEnv, GITHUB_TOKEN: "obsolete" }), /no longer supported/);
+  await assert.rejects(load({ ...baseEnv, VOID_AI_API_KEY: "secret" }), /only on OpenCode Web/);
 });
 
-test("rejects a shared harness parent", async () => {
-  await assert.rejects(
-    execFileAsync(process.execPath, ["--import", "tsx", "--eval", "import('./src/env.ts')"], {
-      cwd: serviceRoot,
-      env: {
-        ...baseEnv,
-        HARNESS_DATA_DIR: "/var/lib",
-      },
-    }),
-    /HARNESS_DATA_DIR must be a per-repository child of \/opt\/issue-harness/,
-  );
+test("requires bounded OpenCode server configuration", async () => {
+  await assert.rejects(load({ ...baseEnv, OPENCODE_SERVER_URL: "http://user:pass@example.test" }), /plain HTTP/);
+  await assert.rejects(load({ ...baseEnv, OPENCODE_INTERNAL_TOKEN: "short" }), /at least 32/);
+  await assert.rejects(load({ ...baseEnv, OPENCODE_PARENT_DIRECTORY: "relative" }), /absolute path/);
+});
+
+test("accepts the direct OpenCode server configuration without sandbox variables", async () => {
+  await load(baseEnv);
+});
+
+test("requires a positive workspace retention period", async () => {
+  await assert.rejects(load({ ...baseEnv, WORKSPACE_RETENTION_HOURS: "0" }), /positive number/);
+  await load({ ...baseEnv, WORKSPACE_RETENTION_HOURS: "24" });
 });

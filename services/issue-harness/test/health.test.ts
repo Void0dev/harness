@@ -234,6 +234,278 @@ test("legacy combined health and unknown paths are not exposed", async (t) => {
   assert.equal((await fetch(`${baseUrl}/other`)).status, 404);
 });
 
+test("the internal Issue command requires its bearer token and creates through Harness", async (t) => {
+  let observed: unknown;
+  const { server, baseUrl } = await addressFor({
+    port: 0,
+    repository: "acme/service",
+    getWorkerActivity: () => ({ poll: "waiting", run: "idle" }),
+    commandToken: "command-secret",
+    createIssue: async (request) => {
+      observed = request;
+      return { number: 57, url: "https://github.com/acme/service/issues/57" };
+    },
+  });
+  t.after(() => server.close());
+
+  const unauthorized = await fetch(`${baseUrl}/commands/issues`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "Fix login", parentSessionId: "ses_parent_12345678" }),
+  });
+  assert.equal(unauthorized.status, 401);
+
+  const response = await fetch(`${baseUrl}/commands/issues`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer command-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ text: "Fix login", parentSessionId: "ses_parent_12345678" }),
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(observed, {
+    title: "Fix login",
+    body: "Fix login\n\n<!-- opencode-harness-parent: ses_parent_12345678 -->",
+    labels: ["ai:todo"],
+  });
+  assert.deepEqual(await response.json(), {
+    number: 57,
+    url: "https://github.com/acme/service/issues/57",
+  });
+});
+
+test("the internal Issue command rejects creation only for the same parent", async (t) => {
+  let creates = 0;
+  const { server, baseUrl } = await addressFor({
+    port: 0,
+    repository: "acme/service",
+    getWorkerActivity: () => ({ poll: "waiting", run: "running" }),
+    commandToken: "command-secret",
+    getBlockingIssue: async (parentSessionId) =>
+      parentSessionId === "ses_parent_12345678" ? { number: 1 } : null,
+    createIssue: async () => {
+      creates += 1;
+      return { number: 58, url: "https://github.com/acme/service/issues/58" };
+    },
+  });
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}/commands/issues`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer command-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ text: "Another change", parentSessionId: "ses_parent_12345678" }),
+  });
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: "issue-processing-busy", issueNumber: 1 });
+  assert.equal(creates, 0);
+
+  const otherParent = await fetch(`${baseUrl}/commands/issues`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer command-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ text: "Independent task", parentSessionId: "ses_other_12345678" }),
+  });
+  assert.equal(otherParent.status, 201);
+  assert.equal(creates, 1);
+});
+
+test("concurrent Issue commands reserve one parent before GitHub creation finishes", async (t) => {
+  let creates = 0;
+  let releaseCreation!: () => void;
+  const creationBlocked = new Promise<void>((resolve) => {
+    releaseCreation = resolve;
+  });
+  const { server, baseUrl } = await addressFor({
+    port: 0,
+    repository: "acme/service",
+    getWorkerActivity: () => ({ poll: "waiting", run: "idle" }),
+    commandToken: "command-secret",
+    getBlockingIssue: async () => null,
+    createIssue: async () => {
+      creates += 1;
+      if (creates === 1) await creationBlocked;
+      return {
+        number: 56 + creates,
+        url: `https://github.com/acme/service/issues/${56 + creates}`,
+      };
+    },
+  });
+  t.after(() => server.close());
+
+  const request = () => fetch(`${baseUrl}/commands/issues`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer command-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ text: "One task", parentSessionId: "ses_parent_12345678" }),
+  });
+
+  const first = request();
+  while (creates === 0) await new Promise((resolve) => setImmediate(resolve));
+  const second = await request();
+  releaseCreation();
+  const firstResponse = await first;
+
+  assert.equal(firstResponse.status, 201);
+  assert.equal(second.status, 409);
+  assert.deepEqual(await second.json(), { error: "issue-processing-busy" });
+  assert.equal(creates, 1);
+});
+
+test("the internal answer command queues the first parent reply", async (t) => {
+  let observed: unknown;
+  const { server, baseUrl } = await addressFor({
+    port: 0,
+    repository: "acme/service",
+    getWorkerActivity: () => ({ poll: "waiting", run: "idle" }),
+    commandToken: "command-secret",
+    submitHumanAnswer: async (request) => {
+      observed = request;
+      return { issueNumber: 57 };
+    },
+  });
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}/commands/answers`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer command-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ text: "Use PostgreSQL", parentSessionId: "ses_parent_12345678" }),
+  });
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), { issueNumber: 57 });
+  assert.deepEqual(observed, { text: "Use PostgreSQL", parentSessionId: "ses_parent_12345678" });
+});
+
+test("the internal answer command returns no-content when the parent is not waiting", async (t) => {
+  const { server, baseUrl } = await addressFor({
+    port: 0,
+    repository: "acme/service",
+    getWorkerActivity: () => ({ poll: "waiting", run: "idle" }),
+    commandToken: "command-secret",
+    submitHumanAnswer: async () => null,
+  });
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}/commands/answers`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer command-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ text: "Normal chat", parentSessionId: "ses_parent_12345678" }),
+  });
+  assert.equal(response.status, 204);
+});
+
+test("the internal retry command queues only an explicit recoverable retry", async (t) => {
+  let observed: unknown;
+  const { server, baseUrl } = await addressFor({
+    port: 0,
+    repository: "acme/service",
+    getWorkerActivity: () => ({ poll: "waiting", run: "idle" }),
+    commandToken: "command-secret",
+    submitRetry: async (request) => {
+      observed = request;
+      return { issueNumber: 57 };
+    },
+  });
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}/commands/retries`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer command-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      parentSessionId: "ses_parent_12345678",
+      instruction: "Исправь также адаптивную вёрстку",
+    }),
+  });
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), { issueNumber: 57 });
+  assert.deepEqual(observed, {
+    parentSessionId: "ses_parent_12345678",
+    instruction: "Исправь также адаптивную вёрстку",
+  });
+});
+
+test("the internal retry command rejects an oversized correction", async (t) => {
+  const { server, baseUrl } = await addressFor({
+    port: 0,
+    repository: "acme/service",
+    getWorkerActivity: () => ({ poll: "waiting", run: "idle" }),
+    commandToken: "command-secret",
+    submitRetry: async () => ({ issueNumber: 57 }),
+  });
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}/commands/retries`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer command-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      parentSessionId: "ses_parent_12345678",
+      instruction: "x".repeat(16_001),
+    }),
+  });
+
+  assert.equal(response.status, 400);
+});
+
+test("the task-card endpoint returns only the authenticated parent projection", async (t) => {
+  let observedParent = "";
+  const { server, baseUrl } = await addressFor({
+    port: 0,
+    repository: "acme/service",
+    getWorkerActivity: () => ({ poll: "waiting", run: "idle" }),
+    commandToken: "command-secret",
+    getTaskViews: async (parentSessionId) => {
+      observedParent = parentSessionId;
+      return [{
+        schemaVersion: 1,
+        issueNumber: 57,
+        title: "Fix login",
+        status: "running",
+        stages: ["accepted", "studying"],
+        updatedAt: "2026-07-28T10:00:00.000Z",
+      }];
+    },
+  });
+  t.after(() => server.close());
+
+  const path = "/ui/tasks?parentSessionId=ses_parent_12345678";
+  assert.equal((await fetch(`${baseUrl}${path}`)).status, 401);
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: { authorization: "Bearer command-secret" },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(observedParent, "ses_parent_12345678");
+  assert.deepEqual(await response.json(), { tasks: [{
+    schemaVersion: 1,
+    issueNumber: 57,
+    title: "Fix login",
+    status: "running",
+    stages: ["accepted", "studying"],
+    updatedAt: "2026-07-28T10:00:00.000Z",
+  }] });
+});
+
 async function readJsonOrNull(filePath: string): Promise<unknown> {
   try {
     return JSON.parse(await fs.readFile(filePath, "utf8"));

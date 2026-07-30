@@ -1,4 +1,4 @@
 interface:
-  display_name: "Set Up Project on Coolify"
-  short_description: "Prepare repo and create stage/prod"
-  default_prompt: "Use $setup-coolify-cicd to prepare this repository and set up its stage and production applications on Coolify."
+  display_name: "Bind Existing Project Delivery"
+  short_description: "Bind existing GitHub and Coolify resources"
+  default_prompt: "Use $setup-coolify-cicd to validate and bind this repository to its already-existing stage and production resources without creating or deploying them."

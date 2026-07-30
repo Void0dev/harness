@@ -1,0 +1,89 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
+import {
+  captureSessionMessageIds,
+  createNativeEventHub,
+  createSseForwarder,
+  encodeNativeEvent,
+  sessionSnapshotEvents,
+} from "../lib/native-events.mjs";
+
+test("encodes one OpenCode event as a complete SSE frame", () => {
+  assert.equal(
+    encodeNativeEvent({ type: "message.removed", properties: { sessionID: "ses_test_12345678", messageID: "msg_old_12345678" } }),
+    'data: {"type":"message.removed","properties":{"sessionID":"ses_test_12345678","messageID":"msg_old_12345678"}}\n\n',
+  );
+});
+
+test("wraps injected events for OpenCode's global event stream", () => {
+  const writes = [];
+  const hub = createNativeEventHub();
+  hub.subscribe((value) => writes.push(value), {
+    pathname: "/global/event",
+    directory: "/home/opencode/workspace",
+  });
+
+  hub.publish([{ type: "message.updated", properties: { info: { id: "msg_result_12345678" } } }]);
+
+  assert.deepEqual(writes, [
+    'data: {"directory":"/home/opencode/workspace","payload":{"type":"message.updated","properties":{"info":{"id":"msg_result_12345678"}}}}\n\n',
+  ]);
+});
+
+test("keeps injected events unwrapped for OpenCode's project event stream", () => {
+  const writes = [];
+  const hub = createNativeEventHub();
+  hub.subscribe((value) => writes.push(value), {
+    pathname: "/event",
+    directory: "/home/opencode/workspace",
+  });
+
+  hub.publish([{ type: "message.updated", properties: {} }]);
+
+  assert.deepEqual(writes, ['data: {"type":"message.updated","properties":{}}\n\n']);
+});
+
+test("forwards upstream SSE only at frame boundaries", () => {
+  const writes = [];
+  const forwarder = createSseForwarder((value) => writes.push(value));
+  forwarder.push(Buffer.from('data: {"type":"message.'));
+  assert.deepEqual(writes, []);
+  forwarder.push(Buffer.from('updated"}\n\ndata: next'));
+  assert.deepEqual(writes, ['data: {"type":"message.updated"}\n\n']);
+  forwarder.end();
+  assert.deepEqual(writes, ['data: {"type":"message.updated"}\n\n', "data: next"]);
+});
+
+test("projects removals and a complete native message snapshot after external database changes", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "harness-native-events-"));
+  const dbPath = path.join(directory, "opencode.db");
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+      CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+    `);
+    const sessionID = "ses_test_12345678";
+    db.prepare("INSERT INTO message VALUES (?, ?, ?, ?, ?)").run("msg_old_12345678", sessionID, 1, 1, JSON.stringify({ role: "assistant", parentID: "msg_user_12345678" }));
+    const before = captureSessionMessageIds(dbPath, sessionID);
+    db.prepare("DELETE FROM message WHERE id = ?").run("msg_old_12345678");
+    db.prepare("INSERT INTO message VALUES (?, ?, ?, ?, ?)").run("msg_user_12345678_harness_task_result", sessionID, 2, 2, JSON.stringify({ role: "assistant", parentID: "msg_user_12345678", time: { created: 2, completed: 3 }, finish: "stop" }));
+    db.prepare("INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)").run("prt_result_12345678", "msg_user_12345678_harness_task_result", sessionID, 2, 2, JSON.stringify({ type: "text", text: "Готово" }));
+
+    const events = sessionSnapshotEvents(dbPath, sessionID, before);
+    assert.deepEqual(events[0], { type: "message.removed", properties: { sessionID, messageID: "msg_old_12345678" } });
+    const message = events.find((event) => event.type === "message.updated");
+    assert.equal(message.properties.info.id, "msg_user_12345678_harness_task_result");
+    assert.equal(message.properties.info.sessionID, sessionID);
+    const part = events.find((event) => event.type === "message.part.updated");
+    assert.equal(part.properties.part.messageID, "msg_user_12345678_harness_task_result");
+    assert.equal(part.properties.part.text, "Готово");
+  } finally {
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

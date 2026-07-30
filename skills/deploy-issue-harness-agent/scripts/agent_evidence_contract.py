@@ -18,11 +18,11 @@ AGENT_INVENTORY_FIELDS = EVIDENCE_METADATA_FIELDS | frozenset({
     "applicationUuid",
     "serverUuid",
     "harnessImage",
-    "sandboxImage",
+    "opencodeWebImage",
     "dataDir",
     "replicas",
     "rolloutHarnessImage",
-    "rolloutSandboxImage",
+    "rolloutOpenCodeWebImage",
     "rolloutStatus",
 })
 

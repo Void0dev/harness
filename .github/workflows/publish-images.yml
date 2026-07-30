@@ -19,8 +19,8 @@ jobs:
         include:
           - image: issue-harness
             dockerfile: services/issue-harness/Dockerfile
-          - image: sandcastle-harness
-            dockerfile: .sandcastle/Dockerfile
+          - image: opencode-web
+            dockerfile: opencode/Dockerfile
     steps:
       - name: Validate trusted publication ref
         shell: bash

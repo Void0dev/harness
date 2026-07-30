@@ -1,6 +1,6 @@
 # Production diagnostics adapter
 
-Production diagnosis is a separate read-only identity and service. Do not reuse the coding listener or its GitHub/Codex/Coolify credentials.
+Production diagnosis is a separate read-only identity and service. Do not reuse the coding listener or its GitHub/OpenCode/Coolify credentials.
 
 The adapter must expose:
 

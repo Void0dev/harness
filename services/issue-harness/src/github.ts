@@ -1,6 +1,7 @@
 import { Octokit } from "@octokit/rest";
 import { config } from "./env.js";
 import { labelColors, labels, statusLabels } from "./labels.js";
+import { parseParentSessionId } from "./opencode.js";
 
 const trustedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
@@ -9,7 +10,7 @@ export type TrackerIssue = Awaited<ReturnType<GithubTracker["nextIssue"]>>;
 export class GithubTracker {
   private readonly octokit: Octokit;
 
-  constructor(octokit: Octokit = new Octokit({ auth: config.githubToken })) {
+  constructor(octokit: Octokit) {
     this.octokit = octokit;
   }
 
@@ -23,14 +24,38 @@ export class GithubTracker {
       if ((error as { status?: number }).status === 404) {
         throw new Error(
           [
-            `GitHub repository ${config.owner}/${config.repo} was not found or the token cannot access it.`,
-            "Check GITHUB_OWNER/GITHUB_REPO spelling, make sure the repository exists, and ensure the PAT is scoped to this repository.",
-            "For a fine-grained PAT, grant Metadata read, Contents read/write, Issues read/write, and Pull requests read/write.",
+            `GitHub repository ${config.owner}/${config.repo} was not found or the GitHub App installation cannot access it.`,
+            "Check GITHUB_OWNER/GITHUB_REPO, the Installation ID, and that the App is installed on this repository.",
+            "Grant Metadata read, Contents read/write, Issues read/write, and Pull requests read/write.",
           ].join(" "),
         );
       }
       throw error;
     }
+
+    for (const branch of ["main", config.baseBranch]) {
+      try {
+        await this.octokit.rest.repos.getBranch({
+          owner: config.owner,
+          repo: config.repo,
+          branch,
+        });
+      } catch (error) {
+        if ((error as { status?: number }).status === 404) {
+          throw new Error(`Required GitHub branch ${branch} was not found in ${config.owner}/${config.repo}`);
+        }
+        throw error;
+      }
+    }
+  }
+
+  async createIssue(request: { title: string; body: string; labels: string[] }) {
+    const response = await this.octokit.rest.issues.create({
+      owner: config.owner,
+      repo: config.repo,
+      ...request,
+    });
+    return { number: response.data.number, url: response.data.html_url };
   }
 
   async ensureLabels() {
@@ -56,16 +81,30 @@ export class GithubTracker {
   async nextIssue() {
     const todo = await this.listIssues(labels.todo);
     const running = await this.listIssues(labels.running);
-    const candidates = [...todo, ...running].filter((issue) => {
+    const candidates = [...running, ...todo].filter((issue) => {
       const issueLabels = issue.labels.map((label) => (typeof label === "string" ? label : label.name));
       return (
         !issue.pull_request
-        && trustedAssociations.has(issue.author_association ?? "")
         && !issueLabels.includes(labels.needsHuman)
         && !issueLabels.includes(labels.finished)
       );
     });
     return candidates[0] ?? null;
+  }
+
+  async findBlockingIssue(parentSessionId: string) {
+    const groups = await Promise.all([
+      this.listIssues(labels.running),
+      this.listIssues(labels.todo),
+      this.listIssues(labels.needsHuman),
+    ]);
+    const seen = new Set<number>();
+    for (const issue of groups.flat()) {
+      if (seen.has(issue.number)) continue;
+      seen.add(issue.number);
+      if (!issue.pull_request && parseParentSessionId(issue.body) === parentSessionId) return issue;
+    }
+    return null;
   }
 
   async recentComments(issueNumber: number) {
@@ -80,8 +119,8 @@ export class GithubTracker {
         const body = comment.body ?? "";
         return (
           trustedAssociations.has(comment.author_association) &&
-          !body.startsWith("Codex picked this up on branch") &&
-          !body.startsWith("Human attention needed:\n\nCodex run failed before finishing.")
+          !body.startsWith("OpenCode picked this up on branch") &&
+          !body.startsWith("Human attention needed:\n\nOpenCode run failed before finishing.")
         );
       })
       .slice(-10)
@@ -90,7 +129,19 @@ export class GithubTracker {
   }
 
   async moveStatus(issueNumber: number, status: keyof Pick<typeof labels, "todo" | "running" | "finished">) {
-    const target = labels[status];
+    await this.setStatusLabel(issueNumber, labels[status]);
+  }
+
+  async needsHuman(issueNumber: number, body: string) {
+    await this.markNeedsHuman(issueNumber);
+    await this.comment(issueNumber, `Human attention needed:\n\n${body}`);
+  }
+
+  async markNeedsHuman(issueNumber: number) {
+    await this.setStatusLabel(issueNumber, labels.needsHuman);
+  }
+
+  private async setStatusLabel(issueNumber: number, target: string) {
     await this.octokit.rest.issues.addLabels({
       owner: config.owner,
       repo: config.repo,
@@ -111,16 +162,6 @@ export class GithubTracker {
         if ((error as { status?: number }).status !== 404) throw error;
       }
     }
-  }
-
-  async needsHuman(issueNumber: number, body: string) {
-    await this.octokit.rest.issues.addLabels({
-      owner: config.owner,
-      repo: config.repo,
-      issue_number: issueNumber,
-      labels: [labels.needsHuman],
-    });
-    await this.comment(issueNumber, `Human attention needed:\n\n${body}`);
   }
 
   async comment(issueNumber: number, body: string) {

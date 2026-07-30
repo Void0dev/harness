@@ -1,8 +1,8 @@
 {
   "harnessManifest": null,
-  "sandboxManifest": null,
+  "opencodeWebManifest": null,
   "harnessAttestationBundle": null,
-  "sandboxAttestationBundle": null,
+  "opencodeWebAttestationBundle": null,
   "trustedRoot": null,
   "sourceRef": null,
   "sourceCommit": null,
