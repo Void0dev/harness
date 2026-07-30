@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -49,6 +51,29 @@ test("requires bounded OpenCode server configuration", async () => {
 
 test("accepts the direct OpenCode server configuration without sandbox variables", async () => {
   await load(baseEnv);
+});
+
+test("does not load a filesystem dotenv file in production", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "issue-harness-production-env-"));
+  try {
+    await fs.writeFile(path.join(root, ".env"), "VOID_AI_API_KEY=must-not-reach-worker\n");
+    await load({ ...baseEnv, INIT_CWD: root, NODE_ENV: "production" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("keeps filesystem dotenv loading for local development", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "issue-harness-development-env-"));
+  try {
+    await fs.writeFile(path.join(root, ".env"), "WORKSPACE_RETENTION_HOURS=0\n");
+    await assert.rejects(
+      load({ ...baseEnv, INIT_CWD: root, NODE_ENV: "development" }),
+      /positive number/,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("requires a positive workspace retention period", async () => {
