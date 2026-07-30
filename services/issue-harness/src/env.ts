@@ -2,8 +2,10 @@ import dotenv from "dotenv";
 import path from "node:path";
 
 const repoRoot = path.resolve(process.env.INIT_CWD ?? process.cwd());
-dotenv.config({ path: path.join(repoRoot, ".env") });
-dotenv.config();
+if (process.env.NODE_ENV !== "production") {
+  dotenv.config({ path: path.join(repoRoot, ".env") });
+  dotenv.config();
+}
 
 function required(name: string) {
   const value = process.env[name];

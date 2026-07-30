@@ -27,7 +27,8 @@ COPY . .
 RUN find services/issue-harness -maxdepth 1 -type f -name '*.sh' -exec sed -i 's/\r$//' {} + \
   && npm run build -w services/issue-harness
 
-ENV HARNESS_DATA_DIR=/opt/issue-harness/data
-ENV HOME=/home/agent
+ENV HARNESS_DATA_DIR=/opt/issue-harness/data \
+    HOME=/home/agent \
+    NODE_ENV=production
 USER agent
 CMD ["bash", "services/issue-harness/start.sh"]

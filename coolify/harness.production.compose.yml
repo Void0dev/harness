@@ -11,6 +11,7 @@ services:
       dockerfile: services/issue-harness/Dockerfile
     user: "10001:10001"
     environment:
+      NODE_ENV: production
       GITHUB_APP_ID: ${GITHUB_APP_ID:?set the GitHub App ID}
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?set the GitHub App installation ID}
       GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
@@ -83,8 +84,8 @@ services:
         source: harness-runs
         target: /opt/issue-harness/data/runs
       - type: volume
-        source: opencode-state
-        target: /home/opencode/.local/share/opencode
+        source: opencode-state-v2
+        target: /home/opencode/.local/share
     expose:
       - "4096"
     init: true
@@ -101,7 +102,7 @@ volumes:
   harness-state:
   harness-context:
   harness-runs:
-  opencode-state:
+  opencode-state-v2:
 
 secrets:
   github-app-pem:
