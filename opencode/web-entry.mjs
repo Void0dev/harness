@@ -15,6 +15,8 @@ import {
   createNativeEventHub,
   createSseForwarder,
   sessionSnapshotEvents,
+  taskCompletionEvents,
+  terminalSessionIdleEvent,
 } from "./lib/native-events.mjs";
 import {
   SESSION_COOKIE,
@@ -267,7 +269,10 @@ async function proxyNativeHarnessCommand(request, response, url) {
           });
           return harnessCommandOutcome(command.command, result);
         } catch {
-          return { status: "failed" };
+          return {
+            status: "failed",
+            failure: "harness-unreachable",
+          };
         }
       },
       onOutcome: (outcome) => {
@@ -281,7 +286,9 @@ async function proxyNativeHarnessCommand(request, response, url) {
           projectDirectory,
         });
         if (materialized.changed) {
-          nativeEventHub.publish(sessionSnapshotEvents(opencodeDatabasePath, outcome.sessionID, previousMessageIds));
+          const events = sessionSnapshotEvents(opencodeDatabasePath, outcome.sessionID, previousMessageIds);
+          if (outcome.status !== "accepted") events.push(terminalSessionIdleEvent(outcome.sessionID));
+          nativeEventHub.publish(events);
         }
       },
       onError: (error) => {
@@ -383,14 +390,19 @@ async function proxyTaskViews(requestUrl, response) {
       return;
     }
     const payload = JSON.parse(upstream.body.toString("utf8"));
+    const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
     const materialized = materializeTaskMessages({
       dbPath: opencodeDatabasePath,
       parentSessionId,
-      tasks: Array.isArray(payload.tasks) ? payload.tasks : [],
+      tasks,
       projectDirectory,
     });
     if (materialized.changed) {
-      nativeEventHub.publish(sessionSnapshotEvents(opencodeDatabasePath, parentSessionId, previousMessageIds));
+      nativeEventHub.publish(taskCompletionEvents(
+        sessionSnapshotEvents(opencodeDatabasePath, parentSessionId, previousMessageIds),
+        parentSessionId,
+        tasks.every((task) => ["finished", "failed", "awaiting_human"].includes(task?.status)),
+      ));
     }
     const body = Buffer.from(JSON.stringify({ ...payload, materialized: materialized.changed }));
     response.writeHead(200, {

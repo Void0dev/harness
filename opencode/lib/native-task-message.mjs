@@ -102,7 +102,7 @@ export function materializeCommandOutcome({
         ? `Нельзя создать новый Issue: Issue #${issueNumber} уже выполняется или ожидает выполнения. Дождитесь его завершения.`
         : "Нельзя создать новый Issue: в этом чате уже выполняется или ожидает выполнения другая задача.";
     } else if (outcome?.status === "failed") {
-      reply = "Не удалось создать Issue. Harness или GitHub временно недоступен. Попробуйте отправить команду ещё раз.";
+      reply = failureText(outcome.failure);
     } else if (outcome?.status === "nothing-to-retry") {
       reply = "В этом чате сейчас нечего повторять: нет технической ошибки с доступным восстановлением.";
     }
@@ -116,6 +116,20 @@ export function materializeCommandOutcome({
   } finally {
     db.close();
   }
+}
+
+function failureText(failure) {
+  const messages = {
+    "invalid-request": "Harness отклонил запрос: команда `/issue` имеет неверный формат.",
+    "request-too-large": "Harness отклонил запрос: текст для Issue слишком большой.",
+    "issue-queue-check-failed": "Не удалось проверить очередь задач: Harness временно недоступен.",
+    "github-issue-creation-failed": "GitHub не создал Issue: API вернул ошибку. Проверьте логи контейнера `issue-harness`.",
+    "harness-unreachable": "Не удалось связаться с Harness: сервис недоступен или не ответил вовремя.",
+  };
+  if (typeof failure === "string" && /^harness-http-\d{3}$/.test(failure)) {
+    return `Harness вернул HTTP ${failure.slice("harness-http-".length)} при создании Issue. Проверьте логи контейнера \`issue-harness\`.`;
+  }
+  return messages[failure] ?? "Harness отклонил создание Issue. Проверьте логи контейнера `issue-harness`.";
 }
 
 function cleanupSyntheticCommandUsers(db, sessionID) {

@@ -4,6 +4,14 @@ export function encodeNativeEvent(event) {
   return `data: ${JSON.stringify(event)}\n\n`;
 }
 
+export function terminalSessionIdleEvent(sessionID) {
+  return { type: "session.status", properties: { sessionID, status: { type: "idle" } } };
+}
+
+export function taskCompletionEvents(snapshotEvents, sessionID, isTerminal = true) {
+  return isTerminal ? [...snapshotEvents, terminalSessionIdleEvent(sessionID)] : snapshotEvents;
+}
+
 export function createNativeEventHub() {
   const subscribers = new Set();
   return {
@@ -52,24 +60,34 @@ export function createSseForwarder(write) {
 export function captureSessionMessageIds(dbPath, sessionID) {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    return new Set(db.prepare("SELECT id FROM message WHERE session_id = ?").all(sessionID).map((row) => row.id));
+    return {
+      messages: captureRows(db, "message", sessionID),
+      parts: captureRows(db, "part", sessionID),
+    };
   } finally {
     db.close();
   }
 }
 
-export function sessionSnapshotEvents(dbPath, sessionID, previousMessageIds = new Set()) {
+export function sessionSnapshotEvents(dbPath, sessionID, previousState = {}) {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const messages = db.prepare(`
-      SELECT id, session_id, data FROM message
+      SELECT id, session_id, time_created, time_updated, data FROM message
       WHERE session_id = ? ORDER BY time_created, id
     `).all(sessionID);
+    const parts = db.prepare(`
+      SELECT id, message_id, session_id, time_created, time_updated, data FROM part
+      WHERE session_id = ? ORDER BY time_created, id
+    `).all(sessionID);
+    const previousMessages = previousState?.messages instanceof Map ? previousState.messages : new Map();
+    const previousParts = previousState?.parts instanceof Map ? previousState.parts : new Map();
     const current = new Set(messages.map((row) => row.id));
-    const events = [...previousMessageIds]
+    const events = [...previousMessages.keys()]
       .filter((messageID) => !current.has(messageID))
       .map((messageID) => ({ type: "message.removed", properties: { sessionID, messageID } }));
     for (const row of messages) {
+      if (previousMessages.get(row.id) === rowFingerprint(row)) continue;
       const data = parseJson(row.data);
       if (!data) continue;
       events.push({
@@ -77,11 +95,8 @@ export function sessionSnapshotEvents(dbPath, sessionID, previousMessageIds = ne
         properties: { info: { id: row.id, sessionID: row.session_id, ...data } },
       });
     }
-    const parts = db.prepare(`
-      SELECT id, message_id, session_id, data FROM part
-      WHERE session_id = ? ORDER BY time_created, id
-    `).all(sessionID);
     for (const row of parts) {
+      if (previousParts.get(row.id) === rowFingerprint(row)) continue;
       const data = parseJson(row.data);
       if (!data) continue;
       events.push({
@@ -93,6 +108,18 @@ export function sessionSnapshotEvents(dbPath, sessionID, previousMessageIds = ne
   } finally {
     db.close();
   }
+}
+
+function captureRows(db, table, sessionID) {
+  const rows = db.prepare(`
+    SELECT id, time_created, time_updated, data FROM ${table}
+    WHERE session_id = ?
+  `).all(sessionID);
+  return new Map(rows.map((row) => [row.id, rowFingerprint(row)]));
+}
+
+function rowFingerprint(row) {
+  return `${row.time_created}\u0000${row.time_updated}\u0000${row.data}`;
 }
 
 function parseJson(value) {

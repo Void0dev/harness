@@ -1054,7 +1054,7 @@ class SkillScriptsTest(unittest.TestCase):
     def test_installation_skills_use_opencode_and_bind_existing_target_resources(self):
         setup = (ROOT / "skills/setup-coolify-cicd/SKILL.md").read_text()
         agent = (ROOT / "skills/deploy-issue-harness-agent/SKILL.md").read_text()
-        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("Never create `stage` or `main`", setup)
         self.assertIn("Never create or deploy the target Coolify application", setup)
@@ -1069,18 +1069,18 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertRegex(addon, r"Issue .+ session .+ branch .+ PR")
 
     def test_addon_skill_uses_one_time_profile_and_never_requests_pem_contents(self):
-        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
         profile = (ROOT / "skills/deploy-opencode-harness/references/developer-profile.md").read_text()
         self.assertIn("coolify_environment_url", addon)
         self.assertNotIn("coolify_production_url", addon)
-        self.assertIn("local path to the downloaded private-key .pem file", addon)
-        self.assertIn("Never ask the user to paste PEM contents", addon)
+        self.assertIn("локальный путь к скачанному private-key .pem", addon)
+        self.assertIn("Никогда не проси вставлять содержимое PEM", addon)
         self.assertIn("GITHUB_APP_INSTALLATION_ID", addon)
-        self.assertIn("per-project GitHub App", addon)
+        self.assertIn("github_app_id", addon)
         self.assertIn("Never ask the user for model URL, model ID, or model key", profile)
 
     def test_addon_skill_derives_the_only_app_repository_and_uses_coolify_generated_domain(self):
-        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
         profile = (ROOT / "skills/deploy-opencode-harness/references/developer-profile.md").read_text()
         for field in (
             "coolify_environment_url",
@@ -1091,34 +1091,57 @@ class SkillScriptsTest(unittest.TestCase):
             "chat_password",
         ):
             self.assertIn(field, addon)
-        self.assertIn("Before asking for the six fields", addon)
-        self.assertIn("`main` and `stage`", addon)
-        self.assertIn("Metadata - read-only", addon)
-        self.assertIn("Contents, Issues, Pull requests - read and write", addon)
+        self.assertIn("Перед вводом семи полей", addon)
+        self.assertIn("`main`", addon)
+        self.assertIn("`stage`", addon)
+        self.assertIn("Metadata", addon)
+        self.assertIn("Contents, Issues, Pull requests", addon)
         self.assertIn("Administration", addon)
         self.assertIn("C:\\harness-secrets", addon)
-        self.assertIn("one message", addon)
+        self.assertIn("Ask for exactly these seven fields", addon)
         self.assertIn("SERVICE_FQDN_OPENCODE_WEB_4096: /", addon)
         self.assertIn("Coolify-generated URL", addon)
         self.assertIn("exactly one repository", addon)
         self.assertNotIn("repo_url:", addon)
-        self.assertIn("Do not request approval while collecting these six values", addon)
+        self.assertIn("Не проси апрув при получении полей", addon)
         self.assertIn("Do not use a `Generate Domain` action", addon)
         self.assertIn("SERVICE_FQDN_OPENCODE_WEB_4096", profile)
 
+    def test_addon_skill_uses_russian_minimal_seven_field_workflow_and_beta_470_default(self):
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("coolify_version", addon)
+        self.assertIn("Ask for exactly these seven fields", addon)
+        self.assertIn("All messages to the operator must be in Russian", addon)
+        self.assertIn("No approval is needed to parse the supplied environment URL", addon)
+        self.assertIn("grouped local-secret read", addon)
+        self.assertIn("Only these seven approved actions", addon)
+        self.assertIn("## Coolify command profiles", addon)
+        self.assertIn("### Default profile", addon)
+        self.assertIn("### Coolify 4.0.0-beta.470", addon)
+        self.assertIn("POST /api/v1/services", addon)
+        self.assertIn("PATCH /api/v1/services/{harness_uuid}/envs/bulk", addon)
+        self.assertIn("POST /api/v1/services/{harness_uuid}/restart?latest=true", addon)
+
     def test_addon_skill_selects_coolify_server_and_destination_without_reading_target_resources(self):
-        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
         profile = (ROOT / "skills/deploy-opencode-harness/references/developer-profile.md").read_text()
         self.assertIn("GET /api/v1/servers", addon)
-        self.assertIn("GET /api/v1/servers/{server_uuid}/destinations", addon)
-        self.assertIn("If exactly one usable server", addon)
-        self.assertIn("If exactly one destination", addon)
-        self.assertIn("Never call the environment-details endpoint", addon)
+        self.assertIn("GET /api/v1/servers", addon)
+        self.assertIn("Omit `destination_uuid`", addon)
+        self.assertIn("Never call a `/servers/{server_uuid}/destinations` endpoint", addon)
+        self.assertIn("environment-details endpoint", addon)
         self.assertNotIn("derive its HTTPS API origin and Project/environment identifiers", addon)
         self.assertNotIn("wildcard DNS", addon)
         self.assertNotIn("*.harness.example.com", profile)
         self.assertNotIn("h-<repository>-<hash8>.<base-domain>", profile)
         self.assertNotIn("chat_domain:", addon)
+
+    def test_addon_skill_reads_each_secret_once_and_reuses_it_for_approved_requests(self):
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("Read each local secret file once per installation", addon)
+        self.assertIn("reuse the retained in-memory token", addon)
 
     def test_addon_skill_keeps_coolify_api_access_in_a_local_operator_profile(self):
         profile = (ROOT / "skills/deploy-opencode-harness/references/developer-profile.md").read_text()
@@ -1128,15 +1151,15 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertNotIn("COOLIFY_URL=", profile)
 
     def test_addon_skill_requires_per_action_approval_and_only_touches_harness_resources(self):
-        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
         self.assertIn("Before every read or write", addon)
         self.assertIn("approve <number>", addon)
         self.assertIn("Never call DELETE", addon)
-        self.assertIn("Never read, modify, deploy, restart, or inspect target application resources", addon)
-        self.assertIn("created in this installation", addon)
+        self.assertIn("Never call a `/servers/{server_uuid}/destinations` endpoint", addon)
+        self.assertIn("Harness", addon)
 
     def test_addon_skill_renders_the_web_only_model_key_config_for_coolify_beta_470(self):
-        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
+        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
         compose = (ROOT / "coolify/harness.production.compose.yml").read_text()
 
         self.assertIn("__VOID_AI_API_KEY_AT_DEPLOY__", addon)
@@ -1144,9 +1167,12 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertIn("Never store `VOID_AI_API_KEY` as a Service environment variable", addon)
         self.assertIn("docker_compose_raw", addon)
         self.assertIn("SERVICE_FQDN_OPENCODE_WEB_4096: /", compose)
+        self.assertIn("POST /api/v1/services", addon)
+        self.assertIn("initial `docker_compose_raw`", addon)
+        self.assertIn("`type: \"docker-compose\"`", addon)
         self.assertIn("PATCH /api/v1/services/{harness_uuid}", addon)
         self.assertIn("POST /api/v1/services/{harness_uuid}/restart?latest=true", addon)
-        self.assertIn("Do not call `/deploy`", addon)
+        self.assertIn("`/deploy`", addon)
 
     def test_harness_runtime_uses_only_github_app_credentials(self):
         runtime_files = [

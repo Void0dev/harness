@@ -342,7 +342,11 @@ async function handleIssueCommand(
     }
     checkingQueue = false;
     json(response, 201, await options.createIssue(issueRequest));
-  } catch {
+  } catch (error) {
+    const details = error instanceof Error
+      ? { name: error.name, message: error.message, status: (error as { status?: unknown }).status }
+      : { message: String(error) };
+    console.error("Issue command failed", { stage: checkingQueue ? "queue-check" : "github-create", ...details });
     json(response, checkingQueue ? 503 : 502, {
       error: checkingQueue ? "issue-queue-check-failed" : "github-issue-creation-failed",
     });
