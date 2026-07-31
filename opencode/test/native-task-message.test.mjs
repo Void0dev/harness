@@ -225,6 +225,66 @@ test("keeps the exact user command and adds a native assistant reply for a busy 
   }
 });
 
+test("explains a failed Issue command with its specific safe cause", () => {
+  const { db, dbPath, directory } = fixture();
+  try {
+    const parent = "ses_parent_12345678";
+    insertSession(db, parent, "Project chat", "/workspace");
+    insertMessage(db, {
+      id: "msg_user_12345678", sessionId: parent, createdAt: 1_000,
+      data: { role: "user", time: { created: 1_000 }, model: { providerID: "void", modelID: "gpt-5.5" } },
+      parts: [{ type: "text", text: "/issue исправь вход" }],
+    });
+
+    materializeCommandOutcome({
+      dbPath,
+      parentSessionId: parent,
+      messageID: "msg_user_12345678",
+      commandText: "/issue исправь вход",
+      outcome: { status: "failed", failure: "issue-queue-check-failed" },
+      projectDirectory: "/workspace",
+      updatedAt: 2_000,
+    });
+
+    const reply = db.prepare("SELECT p.data FROM message m JOIN part p ON p.message_id = m.id WHERE m.id LIKE ?")
+      .get("msg_user_12345678_harness_command_%");
+    assert.match(JSON.parse(reply.data).text, /не удалось проверить очередь задач/i);
+  } finally {
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("keeps an unknown Harness HTTP status visible in the Issue error", () => {
+  const { db, dbPath, directory } = fixture();
+  try {
+    const parent = "ses_parent_12345678";
+    insertSession(db, parent, "Project chat", "/workspace");
+    insertMessage(db, {
+      id: "msg_user_12345678", sessionId: parent, createdAt: 1_000,
+      data: { role: "user", time: { created: 1_000 } },
+      parts: [{ type: "text", text: "/issue исправь вход" }],
+    });
+
+    materializeCommandOutcome({
+      dbPath,
+      parentSessionId: parent,
+      messageID: "msg_user_12345678",
+      commandText: "/issue исправь вход",
+      outcome: { status: "failed", failure: "harness-http-503" },
+      projectDirectory: "/workspace",
+      updatedAt: 2_000,
+    });
+
+    const reply = db.prepare("SELECT p.data FROM message m JOIN part p ON p.message_id = m.id WHERE m.id LIKE ?")
+      .get("msg_user_12345678_harness_command_%");
+    assert.match(JSON.parse(reply.data).text, /HTTP 503/);
+  } finally {
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("recovers a standalone retry acknowledgement as the latest retry command", () => {
   const { db, dbPath, directory } = fixture();
   try {

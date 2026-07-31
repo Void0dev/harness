@@ -28,6 +28,18 @@ test("turns /issue into an immediate native no-reply user message", () => {
   });
 });
 
+test("turns an unclear /issue into a clarification turn without creating an Issue", () => {
+  const plan = nativeCommandPlan({
+    method: "POST",
+    pathname: "/session/ses_parent_12345678/command",
+    body: { command: "issue", arguments: "ролролрол", messageID: "msg_user_12345678" },
+  });
+
+  assert.equal(plan.dispatchToHarness, false);
+  assert.equal(plan.promptBody.noReply, false);
+  assert.match(plan.promptBody.system, /не создавай Issue/i);
+});
+
 test("returns the persisted user message without waiting for GitHub", async () => {
   let releaseDispatch;
   const dispatchBlocked = new Promise((resolve) => { releaseDispatch = resolve; });
@@ -40,7 +52,7 @@ test("returns the persisted user message without waiting for GitHub", async () =
         method: "POST",
         pathname: "/session/ses_parent_12345678/command",
         search: "",
-        body: { command: "issue", arguments: "fix", messageID: "msg_user_12345678" },
+        body: { command: "issue", arguments: "fix login", messageID: "msg_user_12345678" },
       }),
       persist: async () => persisted,
       dispatch: async () => { await dispatchBlocked; return { accepted: true, issueNumber: 57 }; },
@@ -72,5 +84,9 @@ test("classifies accepted, busy, failed, and empty retry responses", () => {
   assert.deepEqual(harnessCommandOutcome("issue", {
     status: 503,
     body: Buffer.from('{"error":"issue-queue-check-failed"}'),
-  }), { status: "failed" });
+  }), { status: "failed", failure: "issue-queue-check-failed" });
+  assert.deepEqual(harnessCommandOutcome("issue", {
+    status: 502,
+    body: Buffer.from('{"error":"github-issue-creation-failed"}'),
+  }), { status: "failed", failure: "github-issue-creation-failed" });
 });

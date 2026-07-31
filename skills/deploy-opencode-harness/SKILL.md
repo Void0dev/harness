@@ -3,59 +3,102 @@ name: deploy-opencode-harness
 description: Use when installing one existing GitHub repository's customer-facing OpenCode Harness in the same existing Coolify environment as that repository's application.
 ---
 
-# Install a Per-Project OpenCode Harness
+# Установка OpenCode Harness для одного проекта
 
-Create exactly one new `harness` Coolify Service for exactly one repository. It contains only `issue-harness` and `opencode-web`. Never read, modify, deploy, restart, or inspect target application resources. Do not list its resources, secrets, volumes, domains, logs, or variables.
+Создай ровно один новый Coolify Service `harness` для одного репозитория. В нём только `issue-harness` и `opencode-web`. Никогда не читай, не меняй, не деплой, не перезапускай и не инспектируй ресурсы целевого приложения: его контейнеры, базы, volumes, секреты, домены, логи или переменные.
 
-## Before asking for the six fields
+## Язык и обязательный маршрут
 
-Show this checklist in the operator's language, then ask for all six fields in **one message**. Do not request approval while collecting these six values.
+All messages to the operator must be in Russian. Все сообщения оператору, включая чек-лист, запросы апрува, ошибки и итог, пиши только по-русски. Не показывай английские шаблоны сообщений пользователю.
 
-1. Create a separate per-project GitHub App and install it on **only this one repository**. It needs Metadata - read-only; Contents, Issues, Pull requests - read and write; Administration must be disabled. Download its private PEM to an ignored local path such as `C:\harness-secrets\<project>.private-key.pem`. Never ask the user to paste PEM contents.
-2. Confirm that the target repository already has `main` and `stage`. Do not create or inspect branches during installation.
-3. Create an API token in the Coolify instance that hosts this project. It is separate for every Coolify server. Put it in an ignored local file such as `C:\harness-secrets\<project>-coolify.env`, with exactly `COOLIFY_TOKEN=<token>`. Never ask the operator to paste the token into chat.
-4. Confirm the local Harness checkout already has `.env.local` with the shared `VOID_AI_API_KEY`. Never ask for the model, its URL, ID, key, or a path to this file.
+Пройди только по обязательному маршруту ниже. Не добавляй проверки, API-запросы, поиск альтернативных endpoint, тестовые Issue/PR или действия «на всякий случай». Вопрос возможен лишь когда ответ действительно необходим для продолжения (например, API вернул несколько серверов) либо оператор сам попросил иной шаг.
 
-Ask for exactly these six fields, with a one-line explanation of each:
+## Перед вводом семи полей
 
-```text
-coolify_environment_url: browser URL of the exact existing Coolify environment
-coolify_token_env_path: local path to this project's COOLIFY_TOKEN file
-github_app_id: numeric App ID
-pem_path: local path to the downloaded private-key .pem file for this project
-chat_login: customer login for OpenCode Web
-chat_password: customer password for OpenCode Web
-```
+Сначала по-русски покажи оператору этот чек-лист. Затем попроси **все семь полей одним сообщением**. Не проси апрув при получении полей.
 
-The environment URL is the only location choice. Never ask for a repository URL, model details, DNS/domain, server UUID, destination UUID, Docker settings, or resource limits.
+1. Создать отдельный GitHub App для этого проекта и установить его **только на один нужный репозиторий**. Права: Metadata — read-only; Contents, Issues, Pull requests — read/write; Administration — disabled. Скачать private PEM в локальную игнорируемую папку, например `C:\harness-secrets\<project>.private-key.pem`. Никогда не проси вставлять содержимое PEM в чат.
+2. Убедиться, что в репозитории уже существуют `main` и `stage`. Не создавай и не проверяй ветки во время установки.
+3. Создать API-токен именно того Coolify, где находится целевой проект. Для каждого Coolify-сервера токен отдельный. Сохранить его локально, например `C:\harness-secrets\<project>-coolify.env`, с единственной строкой `COOLIFY_TOKEN=<token>`. Никогда не проси вставлять токен в чат.
+4. Убедиться, что в локальном checkout Harness есть `.env.local` с общим `VOID_AI_API_KEY`. Не спрашивай модель, URL, ID, ключ или путь к этому файлу.
+5. Узнать точную версию Coolify (например, `4.0.0-beta.470`) в интерфейсе этого Coolify.
 
-## Mandatory approval and boundary
-
-After all six values arrive: Before every read or write, require a separate exact `approve <number>` for each local secret read, GitHub request, Coolify request, creation, update, restart, or verification. Number actions consecutively and use exactly:
+Ask for exactly these seven fields, with a one-line explanation of each:
 
 ```text
-Action <number>: <plain-language description>
-Target: <exact local file, GitHub repository, or Coolify Harness UUID>
-Effect: <what will be read or changed>
-Touches: <only Harness or its installation input>
-Approval required: approve <number>
+coolify_environment_url: браузерная ссылка на точный существующий environment Coolify, где уже работает сайт
+coolify_version: точная версия Coolify из этого же инстанса, например 4.0.0-beta.470
+coolify_token_env_path: локальный путь к файлу этого проекта с COOLIFY_TOKEN
+github_app_id: числовой App ID отдельного GitHub App этого проекта
+pem_path: локальный путь к скачанному private-key .pem этого GitHub App
+chat_login: логин клиента для OpenCode Web
+chat_password: пароль клиента для OpenCode Web
 ```
 
-Any other reply means do nothing. Report only the non-secret result before presenting the next action. Never print, commit, write to disk, or return PEM data, Coolify tokens, model keys, chat passwords, or generated internal tokens. Never call DELETE.
+Ссылка environment — единственный выбор места. Never ask for a repository URL, model details, DNS/domain, server UUID, destination UUID, Docker settings, or resource limits. Never ask the user to paste PEM contents.
 
-Only these discovery reads are allowed: parse the supplied environment URL locally; `GET /api/v1/servers`; then `GET /api/v1/servers/{server_uuid}/destinations`. If exactly one usable server exists, select it automatically; otherwise ask the operator to choose by displayed name. If exactly one destination exists, select it automatically; otherwise ask the operator to choose by displayed name. Never call the environment-details endpoint, target resource list, or any target resource.
+## Апрувы и граница действий
 
-## Installation
+No approval is needed to parse the supplied environment URL. Извлеки локально только origin, `project_uuid` и `environment_uuid` из уже присланной ссылки; это не действие на сервере.
 
-1. Read the approved PEM and use the GitHub App to resolve its installation and `GITHUB_APP_INSTALLATION_ID`. It must expose exactly one repository. Refuse zero or multiple repositories, Admin permission, a personal token, or a different repository.
-2. Read the approved per-project Coolify token file. Parse Project/environment identifiers only from the supplied browser URL.
-3. Create exactly one new Coolify Service named `harness` in that environment. If that name is occupied, stop; never adopt or edit a pre-existing Service. All later writes may target only the Harness created in this installation.
-4. Use `coolify/harness.production.compose.yml` as the only production template. It builds both containers from the public Harness repository's `main` branch, creates only Harness-owned volumes/secrets, mounts the GitHub PEM read-only only to `issue-harness`, keeps the worker private, and applies `cap_drop: ALL` and `no-new-privileges` to both containers. Do not use Docker socket, privileged mode, target paths, manual server files, GHCR packages, or a second Coolify GitHub App.
-5. Set only the new Harness Service's own App data, repository identity, chat credentials, generated internal tokens, and PEM-derived secret. Pin `GITHUB_BASE_BRANCH=stage` and `MAX_CONCURRENT_RUNS=1`.
-6. For Coolify beta.470, read `VOID_AI_API_KEY` from the local Harness `.env.local` only after approval. The template must contain exactly one `__VOID_AI_API_KEY_AT_DEPLOY__` marker in `configs.void-ai-api-key.content` and `opencode-web` must mount it at `/run/secrets/void-ai-api-key`. Always replace the marker only in memory, require one marker before and none after. Never store `VOID_AI_API_KEY` as a Service environment variable or give it to `issue-harness`.
-7. The `opencode-web` environment must contain exactly `SERVICE_FQDN_OPENCODE_WEB_4096: /`. Coolify beta.470 uses this to generate its random proxied URL for port 4096. Do not use a `Generate Domain` action, configure DNS, or ask for a domain.
-8. For this beta version, update Compose only with `PATCH /api/v1/services/{harness_uuid}` and JSON field `docker_compose_raw`, containing Base64 of the exact UTF-8 rendered Compose. Decode locally and compare byte-for-byte before sending. Do not send raw YAML and do not try alternate encodings.
-9. Start only the new Harness with `POST /api/v1/services/{harness_uuid}/restart?latest=true`. Do not call `/deploy`; it returns `404` on this version. After an API error, read that response before changing anything.
-10. After approval, read only the new `opencode-web` FQDN and return its Coolify-generated URL. Do not create a test Issue or PR merely to verify deployment.
+После семи полей действуй строго по таблице. Only these seven approved actions are part of the normal installation. Каждый пункт требует ровно один ответ `approve <номер>` до выполнения. Объединяй безопасные локальные чтения в один шаг; не дроби их.
 
-The result is one isolated Harness in the selected environment, with two containers and one generated customer chat URL.
+| № | Действие после апрува |
+| --- | --- |
+| 1 | Один grouped local-secret read: прочитать в память `coolify_token_env_path`, `pem_path` и локальный `.env.local` Harness; проверить только наличие нужных переменных/файлов, не выводя секреты. |
+| 2 | GitHub App: по PEM и App ID получить installation ID и удостовериться, что App открывает ровно один репозиторий. |
+| 3 | Coolify: `GET /api/v1/servers`; при ровно одном пригодном сервере выбрать его автоматически. |
+| 4 | Создать новый Service `harness` готовым Compose одним `POST /api/v1/services`. |
+| 5 | Передать только переменные нового Harness одним `PATCH /api/v1/services/{harness_uuid}/envs/bulk`. |
+| 6 | Запустить только этот Harness через restart. |
+| 7 | Прочитать только состояние и FQDN нового `opencode-web`, вернуть ссылку чата. |
+
+Before every read or write in this table, require a separate exact `approve <number>`. Формат запроса на апрув всегда по-русски:
+
+```text
+Действие <номер>: <простое описание>
+Цель: <точный локальный файл, GitHub-репозиторий или UUID нового Harness>
+Результат: <что будет прочитано или изменено>
+Затрагивает: только Harness или его входные данные
+Нужно подтверждение: approve <номер>
+```
+
+Любой другой ответ — ничего не делать. После шага сообщай только несекретный результат и следующий апрув. Read each local secret file once per installation и дальше reuse the retained in-memory token or key; никогда не проси следующий апрув только ради повторного чтения неизменённого секрета. Никогда не выводи, не коммить, не записывай на диск и не возвращай PEM, токен Coolify, ключ модели, пароль чата или внутренние токены. Never call DELETE.
+
+При нескольких серверах спроси у оператора имя нужного сервера и затем повтори только действие 3 с его выбором. При ответе о нескольких destinations или занятом имени `harness` остановись и объясни причину; не ищи endpoint destinations и не трогай environment. Never call a `/servers/{server_uuid}/destinations` endpoint, environment-details endpoint, target resource list, или любые ресурсы сайта. Если API уже вернул ошибку, обработай тело того же ответа; не делай отдельный «запрос чтения ошибки».
+
+## Coolify command profiles
+
+Используй профиль, соответствующий `coolify_version`. Если версия неизвестна, применяй Default profile и прямо укажи это в контексте следующего апрува; не изобретай другие запросы и не перебирай URL.
+
+### Default profile
+
+Текущий профиль по умолчанию повторяет проверенный `4.0.0-beta.470` без изменения команд:
+
+- `GET /api/v1/servers`
+- `POST /api/v1/services` с initial `docker_compose_raw`: Base64 точного UTF-8 готового Compose
+- `PATCH /api/v1/services/{harness_uuid}/envs/bulk` с JSON `{ "data": [...] }`
+- `POST /api/v1/services/{harness_uuid}/restart?latest=true`
+
+### Coolify 4.0.0-beta.470
+
+Это проверенный профиль для `4.0.0-beta.470`; команды идентичны Default profile:
+
+- `GET /api/v1/servers`
+- `POST /api/v1/services` с initial `docker_compose_raw`: Base64 точного UTF-8 готового Compose
+- `PATCH /api/v1/services/{harness_uuid}/envs/bulk` с JSON `{ "data": [...] }`
+- `POST /api/v1/services/{harness_uuid}/restart?latest=true`
+
+Не вызывай `/deploy`: на этой версии он возвращает `404`. Не отправляй `type: "docker-compose"`; это не custom-Compose type. Omit `destination_uuid`: beta.470 выбирает единственный destination сервера сам.
+
+## Содержимое создания и запуска
+
+1. На действии 2 используй GitHub App из одобренных PEM и App ID, получи `GITHUB_APP_INSTALLATION_ID`. App должен открывать exactly one repository. Откажись при нуле/нескольких репозиториях, Admin permission, personal token или ином репозитории.
+2. Используй только `coolify/harness.production.compose.yml` как production template. Он собирает оба контейнера из public Harness repository branch `main`, создаёт только Harness-owned volumes/secrets, монтирует GitHub PEM read-only только в `issue-harness`, оставляет worker private и применяет `cap_drop: ALL` и `no-new-privileges` к обоим. Не используй Docker socket, privileged mode, paths целевого приложения, ручные файлы сервера, GHCR packages или второй Coolify GitHub App.
+3. В действии 1 прочитай `VOID_AI_API_KEY` из локального `.env.local` только в память. В шаблоне обязан быть ровно один `__VOID_AI_API_KEY_AT_DEPLOY__` внутри `configs.void-ai-api-key.content`, смонтированный только в `opencode-web` по `/run/secrets/void-ai-api-key`. replace the marker only in memory: до рендера ровно один marker, после — ни одного. Never store `VOID_AI_API_KEY` as a Service environment variable и никогда не передавай его `issue-harness`.
+4. В Compose `opencode-web` должен содержать ровно `SERVICE_FQDN_OPENCODE_WEB_4096: /`: Coolify создаст случайный проксированный URL. Do not use a `Generate Domain` action, DNS или отдельный домен.
+5. В действии 4 создай ровно один Service одним `POST /api/v1/services`: `name: "harness"`, `project_uuid`, `environment_uuid`, `server_uuid`, `instant_deploy: false`, initial `docker_compose_raw`. Не создавай пустой Service и не PATCH Compose при свежей установке. Для отдельно одобренной коррекции уже созданного Harness разрешён только `PATCH /api/v1/services/{harness_uuid}` с `docker_compose_raw` как Base64 exact UTF-8; перед отправкой локально декодируй и сравни байты. Do not send raw YAML and do not try alternate encodings.
+6. В действии 5 запиши только данные нового Harness: identity репозитория, GitHub App, chat credentials, generated internal tokens и PEM-derived secret. Pin `GITHUB_BASE_BRANCH=stage` и `MAX_CONCURRENT_RUNS=1`. Не читай список env этого Service и не передавай туда `VOID_AI_API_KEY`.
+7. В действии 6 используй только `POST /api/v1/services/{harness_uuid}/restart?latest=true`. В действии 7 не создавай тестовый Issue/PR. Верни только Coolify-generated URL чата и итоговый статус.
+
+Итог: в выбранном environment появляется один изолированный Harness с двумя контейнерами и одной сгенерированной ссылкой для клиента.
