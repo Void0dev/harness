@@ -260,7 +260,13 @@ async function proxyNativeHarnessCommand(request, response, url) {
         try {
           const targetUrl = command.command === "issue" ? harnessCommandUrl : harnessRetryUrl;
           const commandBody = command.command === "issue"
-            ? { text: command.argumentsText, parentSessionId: command.sessionID }
+            ? {
+                text: command.argumentsText,
+                parentSessionId: command.sessionID,
+                ...(command.model?.providerID === "void" && typeof command.model.modelID === "string"
+                  ? { modelId: command.model.modelID }
+                  : {}),
+              }
             : { parentSessionId: command.sessionID, ...(command.argumentsText ? { instruction: command.argumentsText } : {}) };
           const result = await forwardHarnessProxy({
             targetUrl,

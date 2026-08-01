@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-test("builds a bounded Issue with its OpenCode parent-session marker", async () => {
+test("builds a bounded Issue with its OpenCode parent-session and model markers", async () => {
   const { buildIssueRequest } = await import("../src/issue-command.js");
   const request = buildIssueRequest({
     text: "Repair login validation\n\nThe form accepts an empty email.",
     parentSessionId: "ses_parent_12345678",
+    modelId: "gpt-5.6-luna",
   });
 
   assert.deepEqual(request, {
     title: "Repair login validation",
-    body: "Repair login validation\n\nThe form accepts an empty email.\n\n<!-- opencode-harness-parent: ses_parent_12345678 -->",
+    body: "Repair login validation\n\nThe form accepts an empty email.\n\n<!-- opencode-harness-parent: ses_parent_12345678 -->\n<!-- opencode-harness-model: gpt-5.6-luna -->",
     labels: ["ai:todo"],
   });
 });

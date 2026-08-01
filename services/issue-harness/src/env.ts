@@ -67,7 +67,7 @@ const dataDir = path.resolve(repoRoot, process.env.HARNESS_DATA_DIR ?? ".harness
 if (process.env.HARNESS_DATA_DIR && (!dataDir.startsWith(`/opt/issue-harness${path.sep}`) || dataDir === "/opt/issue-harness")) {
   throw new Error("HARNESS_DATA_DIR must be a per-repository child of /opt/issue-harness");
 }
-const openCodeModelId = process.env.OPENCODE_MODEL_ID ?? "gpt-5";
+const openCodeModelId = process.env.OPENCODE_MODEL_ID ?? "gpt-5.6-sol";
 if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(openCodeModelId)) {
   throw new Error("OPENCODE_MODEL_ID must be a bounded model identifier");
 }

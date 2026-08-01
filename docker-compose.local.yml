@@ -45,7 +45,6 @@ services:
       OPENCODE_INTERNAL_TOKEN: ${OPENCODE_INTERNAL_TOKEN:?set a 32+ character internal token}
       VOID_AI_BASE_URL: ${VOID_AI_BASE_URL:-https://ai-gateway.void0.org/v1}
       VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key
-      VOID_AI_MODEL_ID: ${VOID_AI_MODEL_ID:?set the model ID exposed by the gateway}
       OPENCODE_SESSION_SECRET: ${OPENCODE_SESSION_SECRET:?set a 32+ character session signing secret}
       OPENCODE_SESSION_TTL_SECONDS: ${OPENCODE_SESSION_TTL_SECONDS:-86400}
       OPENCODE_PROJECT_DIR: /home/opencode/workspace

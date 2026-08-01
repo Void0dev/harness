@@ -20,8 +20,7 @@ All messages to the operator must be in Russian. Все сообщения оп�
 1. Создать отдельный GitHub App для этого проекта и установить его **только на один нужный репозиторий**. Права: Metadata — read-only; Contents, Issues, Pull requests — read/write; Administration — disabled. Скачать private PEM в локальную игнорируемую папку, например `C:\harness-secrets\<project>.private-key.pem`. Никогда не проси вставлять содержимое PEM в чат.
 2. Убедиться, что в репозитории уже существуют `main` и `stage`. Не создавай и не проверяй ветки во время установки.
 3. Создать API-токен именно того Coolify, где находится целевой проект. Для каждого Coolify-сервера токен отдельный. Сохранить его локально, например `C:\harness-secrets\<project>-coolify.env`, с единственной строкой `COOLIFY_TOKEN=<token>`. Никогда не проси вставлять токен в чат.
-4. Убедиться, что в локальном checkout Harness есть `.env.local` с общим `VOID_AI_API_KEY`. Не спрашивай модель, URL, ID, ключ или путь к этому файлу.
-5. Узнать точную версию Coolify (например, `4.0.0-beta.470`) в интерфейсе этого Coolify.
+4. Узнать точную версию Coolify (например, `4.0.0-beta.470`) в интерфейсе этого Coolify.
 
 Ask for exactly these seven fields, with a one-line explanation of each:
 

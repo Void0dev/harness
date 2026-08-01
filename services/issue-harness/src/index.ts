@@ -23,7 +23,7 @@ import {
 } from "./security.js";
 import { publishArtifact, StalePublicationArtifactError } from "./publisher.js";
 import { RunScheduler } from "./scheduler.js";
-import { parseParentSessionId } from "./opencode.js";
+import { parseIssueModelId, parseParentSessionId } from "./opencode.js";
 import { refreshContextCheckout, withFreshContext } from "./context.js";
 import { OpenCodeClient } from "./opencode-client.js";
 import { retryTransient } from "./retry.js";
@@ -41,6 +41,15 @@ const openCode = new OpenCodeClient({
   modelId: config.openCodeModelId,
   parentDirectory: config.openCodeParentDirectory,
 });
+
+function openCodeForIssue(body: string | null | undefined) {
+  return new OpenCodeClient({
+    baseUrl: config.openCodeServerUrl,
+    internalToken: config.openCodeInternalToken,
+    modelId: parseIssueModelId(body, config.openCodeModelId),
+    parentDirectory: config.openCodeParentDirectory,
+  });
+}
 
 let tracker: GithubTracker;
 let getGitHubToken: () => Promise<string>;
@@ -146,19 +155,21 @@ async function cleanupWorkspaceStorage(options: { onlyWhenIdle?: boolean } = {})
 async function ensureParentSession(
   issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>,
   existing: IssueRunState | undefined,
+  client: OpenCodeClient,
 ) {
   const linked = existing?.parentSessionId ?? parseParentSessionId(issue.body);
   if (linked) return linked;
-  const parentSessionId = await openCode.createParent({ title: `GitHub Issue #${issue.number}: ${issue.title}` });
+  const parentSessionId = await client.createParent({ title: `GitHub Issue #${issue.number}: ${issue.title}` });
   return parentSessionId;
 }
 
 async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>) {
   const existing = state.get(issue.number);
   const branch = existing?.branch ?? branchName(issue.number, issue.title);
+  const issueOpenCode = openCodeForIssue(issue.body);
   let parentSessionId: string | undefined;
   try {
-    parentSessionId = await ensureParentSession(issue, existing);
+    parentSessionId = await ensureParentSession(issue, existing, issueOpenCode);
   } catch (error) {
     console.error("OpenCode parent creation failed; Issue remains queued for retry", error);
     return;
@@ -191,11 +202,11 @@ async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker[
   }
 
   if (action === "resume" && existing) {
-    await resumeCoding(issue, existing, parentSessionId);
+    await resumeCoding(issue, existing, parentSessionId, issueOpenCode);
     return;
   }
 
-  await startCoding(issue, branch, parentSessionId, existing);
+  await startCoding(issue, branch, parentSessionId, existing, issueOpenCode);
 }
 
 async function startCoding(
@@ -203,6 +214,7 @@ async function startCoding(
   branch: string,
   parentSessionId: string,
   existing: IssueRunState | undefined,
+  client: OpenCodeClient,
 ) {
   const initial = state.get(issue.number) ?? existing;
   if (initial) await state.set(withTaskView(
@@ -245,7 +257,7 @@ async function startCoding(
       comments,
       execution.workspace,
       parentSessionId,
-      openCode,
+      client,
     );
     const activeState: Omit<IssueRunState, "updatedAt"> = withTaskView({
       issueNumber: issue.number,
@@ -269,7 +281,7 @@ async function startCoding(
       baseSha: execution.baseSha,
       sessionId: started.sessionId,
       prompt: started.prompt,
-      client: openCode,
+      client,
       onProgress: async (parts) => {
         const observed = stageFromMessageParts(parts);
         if (!observed) return;
@@ -303,6 +315,7 @@ async function resumeCoding(
   issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>,
   existing: IssueRunState,
   parentSessionId: string,
+  client: OpenCodeClient,
 ) {
   const { workspace, baseSha, lastSessionId, pendingHumanReply } = existing;
   if (!workspace || !baseSha || !lastSessionId || !pendingHumanReply) {
@@ -326,7 +339,7 @@ async function resumeCoding(
       baseSha,
       sessionId: lastSessionId,
       humanReply: pendingHumanReply,
-      client: openCode,
+      client,
       onProgress: async (parts) => {
         const observed = stageFromMessageParts(parts);
         if (!observed) return;
