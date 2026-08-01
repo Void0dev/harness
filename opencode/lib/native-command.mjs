@@ -10,6 +10,10 @@ export function nativeCommandPlan({ method, pathname, search = "", body }) {
   if (body.command === "issue" && !argumentsText) return undefined;
   const needsClarification = body.command === "issue" && issueNeedsClarification(argumentsText);
   const commandText = `/${body.command}${argumentsText ? ` ${argumentsText}` : ""}`;
+  const model = body.model && typeof body.model === "object"
+    && typeof body.model.providerID === "string" && typeof body.model.modelID === "string"
+    ? { providerID: body.model.providerID, modelID: body.model.modelID }
+    : undefined;
   const promptBody = {
     ...(typeof body.messageID === "string" && MESSAGE_ID.test(body.messageID) ? { messageID: body.messageID } : {}),
     ...(typeof body.agent === "string" && body.agent ? { agent: body.agent } : {}),
@@ -26,6 +30,7 @@ export function nativeCommandPlan({ method, pathname, search = "", body }) {
     argumentsText,
     commandText,
     sessionID: match[1],
+    ...(model ? { model } : {}),
     upstreamPath: `/session/${match[1]}/message${search}`,
     promptBody,
     dispatchToHarness: !needsClarification,

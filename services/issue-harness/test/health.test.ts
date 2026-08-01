@@ -251,7 +251,7 @@ test("the internal Issue command requires its bearer token and creates through H
   const unauthorized = await fetch(`${baseUrl}/commands/issues`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text: "Fix login", parentSessionId: "ses_parent_12345678" }),
+    body: JSON.stringify({ text: "Fix login", parentSessionId: "ses_parent_12345678", modelId: "gpt-5.6-terra" }),
   });
   assert.equal(unauthorized.status, 401);
 
@@ -261,12 +261,12 @@ test("the internal Issue command requires its bearer token and creates through H
       authorization: "Bearer command-secret",
       "content-type": "application/json",
     },
-    body: JSON.stringify({ text: "Fix login", parentSessionId: "ses_parent_12345678" }),
+    body: JSON.stringify({ text: "Fix login", parentSessionId: "ses_parent_12345678", modelId: "gpt-5.6-terra" }),
   });
   assert.equal(response.status, 201);
   assert.deepEqual(observed, {
     title: "Fix login",
-    body: "Fix login\n\n<!-- opencode-harness-parent: ses_parent_12345678 -->",
+    body: "Fix login\n\n<!-- opencode-harness-parent: ses_parent_12345678 -->\n<!-- opencode-harness-model: gpt-5.6-terra -->",
     labels: ["ai:todo"],
   });
   assert.deepEqual(await response.json(), {

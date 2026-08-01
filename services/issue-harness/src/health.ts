@@ -310,12 +310,13 @@ async function handleIssueCommand(
     json(response, 400, { error: "invalid-request" });
     return;
   }
-  const input = payload as { text?: unknown; parentSessionId?: unknown };
+  const input = payload as { text?: unknown; parentSessionId?: unknown; modelId?: unknown };
   let issueRequest: ReturnType<typeof buildIssueRequest>;
   try {
     issueRequest = buildIssueRequest({
       text: typeof input.text === "string" ? input.text : "",
       parentSessionId: typeof input.parentSessionId === "string" ? input.parentSessionId : "",
+      ...(typeof input.modelId === "string" ? { modelId: input.modelId } : {}),
     });
   } catch {
     json(response, 400, { error: "invalid-request" });

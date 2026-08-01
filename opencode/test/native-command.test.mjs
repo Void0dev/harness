@@ -18,6 +18,7 @@ test("turns /issue into an immediate native no-reply user message", () => {
 
   assert.equal(plan.command, "issue");
   assert.equal(plan.sessionID, "ses_parent_12345678");
+  assert.deepEqual(plan.model, { providerID: "void", modelID: "gpt-5.5" });
   assert.equal(plan.upstreamPath, "/session/ses_parent_12345678/message?directory=%2Fhome%2Fopencode%2Fworkspace");
   assert.deepEqual(plan.promptBody, {
     messageID: "msg_user_12345678",
