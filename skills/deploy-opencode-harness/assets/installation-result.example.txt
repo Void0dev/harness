@@ -1,0 +1,3 @@
+url: https://harness.example.test
+login: generated-login
+password: generated-password

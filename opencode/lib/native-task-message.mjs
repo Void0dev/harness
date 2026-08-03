@@ -86,7 +86,11 @@ export function materializeCommandOutcome({
     }
     const part = parseJson(row.part_data) ?? { type: "text" };
     const issueNumber = Number(outcome?.issueNumber);
-    const accepted = outcome?.status === "accepted" && Number.isSafeInteger(issueNumber) && issueNumber > 0;
+    const mergeCommand = outcome?.command === "merge";
+    const accepted = !mergeCommand
+      && outcome?.status === "accepted"
+      && Number.isSafeInteger(issueNumber)
+      && issueNumber > 0;
     const exactText = accepted
       ? `${commandText}\n\n<!-- opencode-harness-issue: ${issueNumber} -->`
       : commandText;
@@ -96,14 +100,14 @@ export function materializeCommandOutcome({
         .run(JSON.stringify({ ...part, text: exactText }), updatedAt, row.part_id);
       changed = true;
     }
-    let reply;
-    if (outcome?.status === "busy") {
+    let reply = mergeCommand ? mergeOutcomeText(outcome) : undefined;
+    if (!mergeCommand && outcome?.status === "busy") {
       reply = Number.isSafeInteger(issueNumber) && issueNumber > 0
         ? `Нельзя создать новый Issue: Issue #${issueNumber} уже выполняется или ожидает выполнения. Дождитесь его завершения.`
         : "Нельзя создать новый Issue: в этом чате уже выполняется или ожидает выполнения другая задача.";
-    } else if (outcome?.status === "failed") {
+    } else if (!mergeCommand && outcome?.status === "failed") {
       reply = failureText(outcome.failure);
-    } else if (outcome?.status === "nothing-to-retry") {
+    } else if (!mergeCommand && outcome?.status === "nothing-to-retry") {
       reply = "В этом чате сейчас нечего повторять: нет технической ошибки с доступным восстановлением.";
     }
     if (reply) changed = upsertCommandReply(db, row, reply, {}, projectDirectory, updatedAt) || changed;
@@ -116,6 +120,38 @@ export function materializeCommandOutcome({
   } finally {
     db.close();
   }
+}
+
+function mergeOutcomeText(outcome) {
+  const target = outcome?.target === "prod" ? "production" : "stage";
+  const prNumber = Number(outcome?.pullRequestNumber);
+  const pr = Number.isSafeInteger(prNumber) && prNumber > 0 ? `PR #${prNumber}` : "Pull Request";
+  if (outcome?.status === "merged") return `${pr} успешно смержен в ${target}.`;
+  if (outcome?.status === "already-merged") return `${pr} уже был смержен в ${target}; повторный merge не выполнялся.`;
+  if (outcome?.status === "ambiguous") {
+    const candidates = Array.isArray(outcome?.candidates)
+      ? outcome.candidates.filter((item) => Number.isSafeInteger(item?.issueNumber) && Number.isSafeInteger(item?.prNumber)).slice(0, 10)
+      : [];
+    const suffix = candidates.length > 0
+      ? ` Укажите Issue явно: ${candidates.map((item) => `#${item.issueNumber} (PR #${item.prNumber})`).join(", ")}.`
+      : " Укажите Issue явно: /merge stage #<issue>.";
+    return `Найдено несколько подходящих PR для stage.${suffix}`;
+  }
+  if (outcome?.status === "no-candidate") {
+    return target === "production"
+      ? "В stage нет новых изменений для promotion в production."
+      : "В этой чат-сессии нет завершённого Harness PR, доступного для merge в stage.";
+  }
+  if (outcome?.status === "blocked") {
+    const reason = boundedMergeReason(outcome?.reason);
+    return `Merge в ${target} заблокирован GitHub policy${reason ? `: ${reason}` : "."}`;
+  }
+  return "Не удалось выполнить merge. Повторите явную команду после проверки GitHub policy.";
+}
+
+function boundedMergeReason(value) {
+  if (typeof value !== "string") return "";
+  return value.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500);
 }
 
 function failureText(failure) {

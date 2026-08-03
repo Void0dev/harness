@@ -1,4 +1,0 @@
-interface:
-  display_name: "Deploy OpenCode Issue Worker"
-  short_description: "Deploy the Issue worker and shared sessions"
-  default_prompt: "Use $deploy-issue-harness-agent to deploy authenticated OpenCode Web, shared parent/child sessions, and the GitHub Issue-to-PR flow for this existing repository."

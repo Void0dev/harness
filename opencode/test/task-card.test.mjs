@@ -11,6 +11,8 @@ test("extracts only a valid OpenCode session ID from the route", () => {
 test("shows exactly the slash command entered by the user", () => {
   assert.equal(visibleCommandText("Issue #57: /issue Исправь вход"), "/issue Исправь вход");
   assert.equal(visibleCommandText("Повторный запуск Issue #57 поставлен в очередь.\n\n/retry Учти тест"), "/retry Учти тест");
+  assert.equal(visibleCommandText("/merge stage #57"), "/merge stage #57");
+  assert.equal(visibleCommandText("/merge prod"), "/merge prod");
   assert.equal(visibleCommandText("Обычное сообщение"), undefined);
 });
 

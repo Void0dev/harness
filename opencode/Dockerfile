@@ -6,10 +6,12 @@ LABEL org.opencontainers.image.source=$SOURCE_REPOSITORY \
       org.opencontainers.image.revision=$SOURCE_COMMIT
 
 RUN npm install -g opencode-ai@1.18.7 \
-  && useradd -m -u 10001 opencode \
-  && install -d -o opencode -g opencode -m 0700 \
+  && groupadd -g 20001 harness-shared \
+  && useradd -m -u 10002 -g 20001 opencode \
+  && install -d -o opencode -g harness-shared -m 0700 \
     /home/opencode/.local/share \
     /home/opencode/.local/state \
+  && install -d -o opencode -g harness-shared -m 2770 \
     /opt/issue-harness/data/context \
     /opt/issue-harness/data/runs
 
@@ -18,7 +20,7 @@ COPY opencode/web-entry.mjs /opt/opencode/web-entry.mjs
 COPY opencode/auth.mjs /opt/opencode/auth.mjs
 COPY opencode/lib /opt/opencode/lib
 COPY opencode/ui /opt/opencode/ui
-COPY --chown=10001:10001 opencode/web-config /home/opencode/.config/opencode
+COPY --chown=10002:20001 opencode/web-config /home/opencode/.config/opencode
 
 USER opencode
 ENV HOME=/home/opencode \

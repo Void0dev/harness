@@ -1,8 +1,6 @@
 services:
   harness:
-    build:
-      context: ..
-      dockerfile: services/issue-harness/Dockerfile
+    image: ${HARNESS_IMAGE:?set an immutable harness image digest}
     user: "10001:20001"
     environment:
       NODE_ENV: production
@@ -11,10 +9,10 @@ services:
       GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
       GITHUB_OWNER: ${GITHUB_OWNER:?set owner}
       GITHUB_REPO: ${GITHUB_REPO:?set repository}
-      GITHUB_BASE_BRANCH: ${GITHUB_BASE_BRANCH:-stage}
+      GITHUB_BASE_BRANCH: stage
       HARNESS_COMMAND_TOKEN: ${HARNESS_COMMAND_TOKEN:?set command token}
       HARNESS_HEALTH_DETAILS_TOKEN: ${HARNESS_HEALTH_DETAILS_TOKEN:?set health token}
-      HARNESS_DATA_DIR: ${HARNESS_DATA_DIR:?set data directory}
+      HARNESS_DATA_DIR: ${HARNESS_DATA_DIR:?set per-repository data directory}
       WORKSPACE_RETENTION_HOURS: ${WORKSPACE_RETENTION_HOURS:-24}
       MAX_CONCURRENT_RUNS: 1
       OPENCODE_SERVER_URL: http://opencode-runtime:4096
@@ -41,15 +39,14 @@ services:
     restart: unless-stopped
 
   opencode-runtime:
-    build:
-      context: ..
-      dockerfile: opencode/Dockerfile
+    image: ${OPENCODE_WEB_IMAGE:?set an immutable OpenCode Web image digest}
     user: "10002:20001"
     environment:
       OPENCODE_RUNTIME_MODE: private
       OPENCODE_INTERNAL_TOKEN: ${OPENCODE_INTERNAL_TOKEN:?set internal token}
       VOID_AI_BASE_URL: ${VOID_AI_BASE_URL:-https://ai-gateway.void0.org/v1}
       VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key
+      VOID_AI_MODEL_ID: ${VOID_AI_MODEL_ID:?set model ID}
       OPENCODE_PROJECT_DIR: /home/opencode/workspace
       HARNESS_COMMAND_URL: http://harness:3000/commands/issues
       HARNESS_ANSWER_URL: http://harness:3000/commands/answers

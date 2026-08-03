@@ -7,15 +7,17 @@ LABEL org.opencontainers.image.source=$SOURCE_REPOSITORY \
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git curl jq ca-certificates openssh-client \
-  && useradd -m -u 10001 agent \
-  && install -d -o agent -g agent -m 0700 \
+  && groupadd -g 20001 harness-shared \
+  && useradd -m -u 10001 -g 20001 agent \
+  && install -d -o agent -g harness-shared -m 0700 \
     /opt/issue-harness/data \
     /opt/issue-harness/data/artifacts \
-    /opt/issue-harness/data/context \
     /opt/issue-harness/data/logs \
     /opt/issue-harness/data/publishers \
-    /opt/issue-harness/data/runs \
     /opt/issue-harness/data/state \
+  && install -d -o agent -g harness-shared -m 2770 \
+    /opt/issue-harness/data/context \
+    /opt/issue-harness/data/runs \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -31,4 +33,5 @@ ENV HARNESS_DATA_DIR=/opt/issue-harness/data \
     HOME=/home/agent \
     NODE_ENV=production
 USER agent
+EXPOSE 3000 4096
 CMD ["bash", "services/issue-harness/start.sh"]

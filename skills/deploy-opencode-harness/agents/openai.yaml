@@ -1,4 +1,4 @@
 interface:
-  display_name: "Install Project Harness"
-  short_description: "Deploy one repository's customer chat in its Coolify production environment"
-  default_prompt: "Use $deploy-opencode-harness to install Harness for one existing GitHub repository in its existing Coolify environment. Show the short prerequisite checklist, then collect all six project fields in one message. Never ask me to paste a PEM or token."
+  display_name: "Deploy OpenCode Harness"
+  short_description: "Install or resume one isolated repository Harness"
+  default_prompt: "Use $deploy-opencode-harness to discover available server access, guide the repository owner through the Release App checkpoint, install one public Harness plus one private OpenCode Runtime, verify it, and return exactly url, login, and password."

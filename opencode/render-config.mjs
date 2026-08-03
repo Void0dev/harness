@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+if (process.env.OPENCODE_RUNTIME_MODE === "private") process.umask(0o007);
+
 const profile = process.env.OPENCODE_PROFILE ?? "web";
 if (!new Set(["web", "worker"]).has(profile)) throw new Error("OPENCODE_PROFILE must be web or worker");
 const baseURL = process.env.VOID_AI_BASE_URL ?? "https://ai-gateway.void0.org/v1";

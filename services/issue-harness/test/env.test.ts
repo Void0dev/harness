@@ -17,9 +17,12 @@ const baseEnv = {
   GITHUB_OWNER: "acme",
   GITHUB_REPO: "service",
   HARNESS_COMMAND_TOKEN: "c".repeat(32),
-  OPENCODE_SERVER_URL: "http://opencode-web:4096",
+  OPENCODE_SERVER_URL: "http://opencode-runtime:4096",
   OPENCODE_INTERNAL_TOKEN: "t".repeat(32),
   OPENCODE_PARENT_DIRECTORY: "/home/opencode/workspace",
+  OPENCODE_SERVER_USERNAME: "developer",
+  OPENCODE_SERVER_PASSWORD: "p".repeat(32),
+  OPENCODE_SESSION_SECRET: "s".repeat(32),
 };
 
 function load(env: NodeJS.ProcessEnv) {
@@ -40,7 +43,7 @@ test("requires an absolute GitHub App private-key path", async () => {
 
 test("rejects removed PAT and direct model-key configuration", async () => {
   await assert.rejects(load({ ...baseEnv, GITHUB_TOKEN: "obsolete" }), /no longer supported/);
-  await assert.rejects(load({ ...baseEnv, VOID_AI_API_KEY: "secret" }), /only on OpenCode Web/);
+  await assert.rejects(load({ ...baseEnv, VOID_AI_API_KEY: "secret" }), /only on OpenCode Runtime/);
 });
 
 test("requires bounded OpenCode server configuration", async () => {
@@ -51,6 +54,13 @@ test("requires bounded OpenCode server configuration", async () => {
 
 test("accepts the direct OpenCode server configuration without sandbox variables", async () => {
   await load(baseEnv);
+});
+
+test("requires bounded public web credentials and session settings", async () => {
+  await assert.rejects(load({ ...baseEnv, OPENCODE_SERVER_PASSWORD: "short" }), /at least 32/);
+  await assert.rejects(load({ ...baseEnv, OPENCODE_SESSION_SECRET: "short" }), /at least 32/);
+  await assert.rejects(load({ ...baseEnv, OPENCODE_PUBLIC_PORT: "80" }), /unprivileged port/);
+  await assert.rejects(load({ ...baseEnv, OPENCODE_SESSION_TTL_SECONDS: "60" }), /between 86400/);
 });
 
 test("does not load a filesystem dotenv file in production", async () => {

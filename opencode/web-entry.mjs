@@ -8,6 +8,9 @@ import { validatedHarnessUrl } from "./lib/harness-endpoint.mjs";
 import { startHarnessProxyServer } from "./lib/harness-proxy-server.mjs";
 import { forwardHarnessProxy } from "./lib/harness-proxy.mjs";
 import { projectSessionMetadata } from "./lib/session-metadata.mjs";
+import { runtimeRequestAuthorized } from "./lib/runtime-auth.mjs";
+import { isMergeCommandPayload } from "./lib/native-merge-command.mjs";
+import { parseMergeOutcomeRequest } from "./lib/runtime-control.mjs";
 import { materializeCommandOutcome, materializeTaskMessages } from "./lib/native-task-message.mjs";
 import { harnessCommandOutcome, nativeCommandPlan, persistThenDispatch } from "./lib/native-command.mjs";
 import {
@@ -28,7 +31,8 @@ import {
   safeNextPath,
 } from "./auth.mjs";
 
-const publicPort = Number.parseInt(process.env.OPENCODE_WEB_PORT ?? "4096", 10);
+const runtimeMode = process.env.OPENCODE_RUNTIME_MODE === "private";
+const publicPort = Number.parseInt(process.env.OPENCODE_RUNTIME_PORT ?? process.env.OPENCODE_WEB_PORT ?? "4096", 10);
 const upstreamPort = Number.parseInt(process.env.OPENCODE_UPSTREAM_PORT ?? "4097", 10);
 const internalHarnessPort = Number.parseInt(process.env.OPENCODE_HARNESS_PROXY_PORT ?? "4098", 10);
 const projectDirectory = process.env.OPENCODE_PROJECT_DIR ?? "/home/opencode/workspace";
@@ -43,8 +47,10 @@ const harnessAnswerUrl = validatedHarnessUrl(process.env.HARNESS_ANSWER_URL ?? "
 const harnessRetryUrl = new URL("/commands/retries", harnessCommandUrl);
 const harnessTasksUrl = process.env.HARNESS_TASKS_URL;
 const sessionTtlSeconds = Number.parseInt(process.env.OPENCODE_SESSION_TTL_SECONDS ?? "86400", 10);
-if (!expectedPassword) throw new Error("OPENCODE_SERVER_PASSWORD is required");
-if (!sessionSecret || sessionSecret.length < 32) throw new Error("OPENCODE_SESSION_SECRET must contain at least 32 characters");
+if (!runtimeMode && !expectedPassword) throw new Error("OPENCODE_SERVER_PASSWORD is required");
+if (!runtimeMode && (!sessionSecret || sessionSecret.length < 32)) {
+  throw new Error("OPENCODE_SESSION_SECRET must contain at least 32 characters");
+}
 if (!internalToken || internalToken.length < 32) throw new Error("OPENCODE_INTERNAL_TOKEN must contain at least 32 characters");
 if (!harnessCommandToken || harnessCommandToken.length < 32 || /\s/.test(harnessCommandToken)) {
   throw new Error("HARNESS_COMMAND_TOKEN must contain at least 32 non-whitespace characters");
@@ -105,11 +111,14 @@ function securityHeaders(response) {
 }
 
 function authorized(request) {
-  const authorization = request.headers.authorization;
-  if (authorization?.startsWith("Bearer ")
-    && credentialsMatch("internal", authorization.slice(7), "internal", internalToken)) return true;
-  const session = parseSessionCookie(cookieValue(request.headers.cookie), { secret: sessionSecret });
-  return session?.username === expectedUsername;
+  return runtimeRequestAuthorized({
+    runtimeMode,
+    authorization: request.headers.authorization,
+    cookieHeader: request.headers.cookie,
+    internalToken,
+    expectedUsername,
+    sessionSecret,
+  });
 }
 
 function secureRequest(request) {
@@ -234,6 +243,11 @@ async function proxyNativeHarnessCommand(request, response, url) {
   }
   let payload;
   try { payload = JSON.parse(body.toString("utf8")); } catch {}
+  if (runtimeMode && isMergeCommandPayload(payload)) {
+    response.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end('{"error":"merge-not-available-in-runtime"}');
+    return;
+  }
   const plan = nativeCommandPlan({
     method: request.method,
     pathname: url.pathname,
@@ -457,8 +471,38 @@ async function proxySessionMetadata(requestUrl, response) {
   }
 }
 
+async function materializeMergeOutcome(request, response) {
+  let body;
+  try {
+    body = await readRequestBody(request, 256 * 1024);
+    const payload = parseMergeOutcomeRequest(JSON.parse(body.toString("utf8")));
+    materializeCommandOutcome({
+      dbPath: opencodeDatabasePath,
+      parentSessionId: payload.parentSessionId,
+      messageID: payload.messageID,
+      commandText: payload.commandText,
+      outcome: payload.outcome,
+      projectDirectory,
+    });
+    response.writeHead(204, { "cache-control": "no-store" });
+    response.end();
+  } catch {
+    response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end('{"error":"invalid-merge-outcome"}');
+  }
+}
+
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://opencode.local");
+  if (runtimeMode && !authorized(request)) {
+    response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end('{"error":"unauthorized"}');
+    return;
+  }
+  if (runtimeMode && ["/login", "/logout"].includes(url.pathname)) {
+    response.writeHead(404).end();
+    return;
+  }
   if (request.method === "GET" && url.pathname === "/login") {
     if (authorized(request)) { response.writeHead(303, { location: safeNextPath(url.searchParams.get("next")) }); response.end(); return; }
     showLogin(response, { next: safeNextPath(url.searchParams.get("next")) });
@@ -513,6 +557,10 @@ const server = http.createServer(async (request, response) => {
     await proxySessionMetadata(url, response);
     return;
   }
+  if (runtimeMode && request.method === "POST" && url.pathname === "/__runtime/control/merge-outcome") {
+    await materializeMergeOutcome(request, response);
+    return;
+  }
   if (request.method === "POST" && /^\/session\/ses_[A-Za-z0-9_-]{8,128}\/command$/.test(url.pathname)) {
     await proxyNativeHarnessCommand(request, response, url);
     return;
@@ -541,7 +589,10 @@ server.on("upgrade", (request, socket, head) => {
   upstream.on("error", () => socket.destroy());
 });
 
-server.listen(publicPort, "0.0.0.0", () => console.log(`OpenCode project UI: http://localhost:${publicPort}${projectRoute}`));
+server.listen(publicPort, "0.0.0.0", () => {
+  const role = runtimeMode ? "Private OpenCode runtime" : "OpenCode project UI";
+  console.log(`${role}: http://localhost:${publicPort}${projectRoute}`);
+});
 function shutdown(signal) {
   harnessProxyServer.close();
   server.close(() => process.exit(0));

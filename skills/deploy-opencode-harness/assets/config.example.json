@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "github": "owner/repository"
+  },
+  "issueAgent": {
+    "applicationUuid": null,
+    "baseBranch": "stage",
+    "harnessImage": null,
+    "opencodeWebImage": null,
+    "imageSourceRepository": "https://github.com/Void0dev/harness",
+    "imageSourceCommit": null,
+    "imagePublicationRunId": null,
+    "serverUuid": null,
+    "dataDir": null,
+    "maxConcurrentRuns": 1,
+    "replicas": 1
+  },
+  "observability": {
+    "provider": null,
+    "service": null,
+    "environment": "production"
+  },
+  "productionAgent": {
+    "mode": "diagnose-only",
+    "allowedTools": [
+      "health.read",
+      "logs.query",
+      "traces.query",
+      "metrics.query",
+      "deploy.status"
+    ],
+    "mutationPath": "none"
+  }
+}

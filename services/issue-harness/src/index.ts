@@ -32,10 +32,18 @@ import { appendObservedStage, stageFromMessageParts } from "./progress.js";
 import { workerFailureQuestion } from "./worker-error.js";
 import { acceptsHumanAnswer, acceptsTechnicalRetry, sanitizeTaskView, taskViewsForParent, technicalRetryTransition, workerSessionDirectory, type TaskStatus, type TaskView } from "./task-view.js";
 import { evaluateHumanCommentWindow } from "./human-comments.js";
+import { startPublicGateway } from "../../../opencode/lib/public-gateway.mjs";
+import { MergeService } from "./merge-service.js";
 
 const state = new StateStore(config.dataDir);
 const remoteUrl = githubRepositoryRemote(config.owner, config.repo);
-const outboundSecrets = [config.healthDetailsToken, config.openCodeInternalToken];
+const outboundSecrets = [
+  config.healthDetailsToken,
+  config.harnessCommandToken,
+  config.openCodeInternalToken,
+  config.webPassword,
+  config.webSessionSecret,
+];
 const openCode = new OpenCodeClient({
   baseUrl: config.openCodeServerUrl,
   internalToken: config.openCodeInternalToken,
@@ -571,7 +579,16 @@ async function publishIssue(
         issue.title,
         `Automated OpenCode child-session run for #${issue.number}.`,
       );
-      return { commitSha: artifact.commitSha, prUrl };
+      const pullRequest = await tracker.findHarnessPullRequest(issue.number, branch);
+      if (!pullRequest || pullRequest.url !== prUrl) {
+        throw new Error("GitHub did not return the Harness pull request after publication");
+      }
+      return {
+        commitSha: artifact.commitSha,
+        prUrl,
+        prNumber: pullRequest.number,
+        prHeadSha: pullRequest.headSha,
+      };
     }, {
       attempts: 3,
       delayMs: 1_000,
@@ -582,7 +599,9 @@ async function publishIssue(
       ...withoutTimestamp(pending),
       status: "finished",
       publishedCommitSha: published.commitSha,
+      prNumber: published.prNumber,
       prUrl: published.prUrl,
+      prHeadSha: published.prHeadSha,
       awaitingAction: undefined,
       pendingHumanReply: undefined,
     }, issue, { status: "finished", prUrl: published.prUrl, question: undefined }));
@@ -687,6 +706,8 @@ async function main() {
   await state.load();
   await tracker.assertRepositoryAccess();
   await tracker.ensureLabels();
+  const mergeService = new MergeService(state, tracker);
+  await mergeService.recoverIncompleteOperations();
   await reconcilePersistedStates();
   await cleanupWorkspaceStorage();
   await refreshContext();
@@ -751,6 +772,16 @@ async function main() {
       await tracker.moveStatus(current.issueNumber, "todo");
       return { issueNumber: current.issueNumber };
     },
+  });
+  await startPublicGateway({
+    port: config.publicWebPort,
+    upstreamUrl: config.openCodeServerUrl,
+    username: config.webUsername,
+    password: config.webPassword,
+    sessionSecret: config.webSessionSecret,
+    internalToken: config.openCodeInternalToken,
+    sessionTtlSeconds: config.webSessionTtlSeconds,
+    submitMerge: (request) => mergeService.submit(request),
   });
   console.log(`Issue harness started for ${config.owner}/${config.repo}`);
 

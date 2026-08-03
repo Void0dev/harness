@@ -56,8 +56,24 @@ function serverUrl() {
   return url.toString().replace(/\/$/, "");
 }
 
+function boundedPort(name: string, fallback: number) {
+  const value = numberEnv(name, fallback);
+  if (!Number.isSafeInteger(value) || value < 1024 || value > 65_535) {
+    throw new Error(`${name} must be a valid unprivileged port`);
+  }
+  return value;
+}
+
+function boundedSessionTtl() {
+  const value = numberEnv("OPENCODE_SESSION_TTL_SECONDS", 86_400);
+  if (!Number.isSafeInteger(value) || value < 86_400 || value > 2_592_000) {
+    throw new Error("OPENCODE_SESSION_TTL_SECONDS must be between 86400 and 2592000");
+  }
+  return value;
+}
+
 if (process.env.VOID_AI_API_KEY) {
-  throw new Error("VOID_AI_API_KEY must not be configured on the issue harness; configure it only on OpenCode Web");
+  throw new Error("VOID_AI_API_KEY must not be configured on the issue harness; configure it only on OpenCode Runtime");
 }
 if (process.env.GITHUB_TOKEN) {
   throw new Error("GITHUB_TOKEN is no longer supported; configure GitHub App credentials instead");
@@ -92,6 +108,11 @@ export const config = {
   openCodeInternalToken: strongSecret("OPENCODE_INTERNAL_TOKEN"),
   openCodeParentDirectory: absolutePathEnv("OPENCODE_PARENT_DIRECTORY"),
   openCodeModelId,
+  publicWebPort: boundedPort("OPENCODE_PUBLIC_PORT", 4096),
+  webUsername: required("OPENCODE_SERVER_USERNAME"),
+  webPassword: strongSecret("OPENCODE_SERVER_PASSWORD"),
+  webSessionSecret: strongSecret("OPENCODE_SESSION_SECRET"),
+  webSessionTtlSeconds: boundedSessionTtl(),
   contextDir: path.join(dataDir, "context"),
   contextRefreshMs: numberEnv("CONTEXT_REFRESH_SECONDS", 60) * 1000,
   workspaceRetentionMs: workspaceRetentionHours * 60 * 60 * 1000,

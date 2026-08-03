@@ -1,4 +1,0 @@
-interface:
-  display_name: "Bind Existing Project Delivery"
-  short_description: "Bind existing GitHub and Coolify resources"
-  default_prompt: "Use $setup-coolify-cicd to validate and bind this repository to its already-existing stage and production resources without creating or deploying them."

@@ -55,9 +55,19 @@ class ProductContractTest(unittest.TestCase):
     def test_repository_has_no_legacy_convex_demo_runtime(self):
         package = (ROOT / "package.json").read_text()
         compose = (ROOT / "coolify/docker-compose.yml").read_text()
-        self.assertFalse((ROOT / "apps" / "convex-demo").exists())
+        environment = (ROOT / ".env.example").read_text()
+        tracked = subprocess.run(
+            ["git", "ls-files", "apps/convex-demo"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(tracked.returncode, 0, tracked.stderr)
+        self.assertEqual(tracked.stdout, "")
         self.assertNotIn("convex-demo", package)
         self.assertNotIn("convex-demo", compose)
+        self.assertNotIn("VITE_CONVEX_URL", environment)
 
     def test_issue_harness_dockerfile_does_not_embed_a_sandbox_runtime(self):
         dockerfile = (ROOT / "services/issue-harness/Dockerfile").read_text()
@@ -97,7 +107,8 @@ class ProductContractTest(unittest.TestCase):
         web = (ROOT / "opencode/Dockerfile").read_text()
         self.assertIn("sed -i 's/\\r$//'", harness)
         self.assertIn("/home/opencode/.local/state", web)
-        self.assertIn("install -d -o opencode -g opencode -m 0700", web)
+        self.assertIn("install -d -o opencode -g harness-shared -m 0700", web)
+        self.assertIn("install -d -o agent -g harness-shared -m 2770", harness)
 
     def test_local_opencode_project_is_browsable_from_its_home_directory(self):
         dockerfile = (ROOT / "opencode/Dockerfile").read_text()
@@ -167,8 +178,8 @@ class ProductContractTest(unittest.TestCase):
 
     def test_coolify_model_key_is_a_web_only_rendered_compose_config(self):
         compose = (ROOT / "coolify/harness.production.compose.yml").read_text()
-        web = compose.split("  opencode-web:", 1)[1].split("volumes:", 1)[0]
-        worker = compose.split("  issue-harness:", 1)[1].split("  opencode-web:", 1)[0]
+        web = compose.split("  opencode-runtime:", 1)[1].split("volumes:", 1)[0]
+        worker = compose.split("  harness:", 1)[1].split("  opencode-runtime:", 1)[0]
 
         self.assertNotIn("VOID_AI_API_KEY: ${", compose)
         self.assertIn("VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key", web)
@@ -179,8 +190,8 @@ class ProductContractTest(unittest.TestCase):
 
     def test_local_compose_keeps_its_local_web_only_config(self):
         compose = (ROOT / "docker-compose.local.yml").read_text()
-        web = compose.split("  opencode-web:", 1)[1].split("volumes:", 1)[0]
-        worker = compose.split("  issue-harness:", 1)[1].split("  opencode-web:", 1)[0]
+        web = compose.split("  opencode-runtime:", 1)[1].split("volumes:", 1)[0]
+        worker = compose.split("  harness:", 1)[1].split("  opencode-runtime:", 1)[0]
 
         self.assertNotIn("VOID_AI_API_KEY: ${", compose)
         self.assertIn("VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key", web)
@@ -189,14 +200,18 @@ class ProductContractTest(unittest.TestCase):
         self.assertIn("void-ai-api-key:\n    content: ${VOID_AI_API_KEY:?", compose)
 
     def test_coolify_compose_files_declare_a_web_only_rendered_config(self):
-        for relative in (
-            "coolify/docker-compose.yml",
-            "skills/deploy-issue-harness-agent/assets/coolify-agent-compose.yml",
+        for relative, worker_name, web_name in (
+            ("coolify/docker-compose.yml", "harness", "opencode-runtime"),
+            (
+                "skills/deploy-opencode-harness/assets/harness-compose.yml",
+                "harness",
+                "opencode-runtime",
+            ),
         ):
             with self.subTest(compose=relative):
                 compose = (ROOT / relative).read_text()
-                web = compose.split("  opencode-web:", 1)[1].split("volumes:", 1)[0]
-                worker = compose.split("  issue-harness:", 1)[1].split("  opencode-web:", 1)[0]
+                web = compose.split(f"  {web_name}:", 1)[1].split("volumes:", 1)[0]
+                worker = compose.split(f"  {worker_name}:", 1)[1].split(f"  {web_name}:", 1)[0]
                 self.assertNotIn("VOID_AI_API_KEY: ${", compose)
                 self.assertIn("VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key", web)
                 self.assertIn("configs:\n      - source: void-ai-api-key", web)
@@ -204,13 +219,17 @@ class ProductContractTest(unittest.TestCase):
                 self.assertIn("content: |\n      __VOID_AI_API_KEY_AT_DEPLOY__", compose)
                 self.assertNotIn("content: ${VOID_AI_API_KEY", compose)
 
-        for relative in (
-            "coolify/docker-compose.yml",
-            "skills/deploy-issue-harness-agent/assets/coolify-agent-compose.yml",
+        for relative, worker_name, web_name in (
+            ("coolify/docker-compose.yml", "harness", "opencode-runtime"),
+            (
+                "skills/deploy-opencode-harness/assets/harness-compose.yml",
+                "harness",
+                "opencode-runtime",
+            ),
         ):
             with self.subTest(production_compose=relative):
                 compose = (ROOT / relative).read_text()
-                worker = compose.split("  issue-harness:", 1)[1].split("  opencode-web:", 1)[0]
+                worker = compose.split(f"  {worker_name}:", 1)[1].split(f"  {web_name}:", 1)[0]
                 self.assertIn("NODE_ENV: production", worker)
 
     def test_secret_scan_covers_fine_grained_github_and_openai_keys(self):
@@ -226,7 +245,7 @@ class ProductContractTest(unittest.TestCase):
 
     def test_agent_inventory_cannot_self_assert_attestation_success(self):
         contract = load_module(
-            "skills/deploy-issue-harness-agent/scripts/agent_evidence_contract.py",
+            "skills/deploy-opencode-harness/scripts/agent_evidence_contract.py",
             "product_agent_evidence",
         ).AGENT_INVENTORY_CONTRACT
         observed = "2026-07-17T00:00:00+00:00"
@@ -255,7 +274,7 @@ class ProductContractTest(unittest.TestCase):
 
     def test_offline_attestation_verifier_binds_subject_source_workflow_ref_and_run(self):
         module = load_module(
-            "skills/deploy-issue-harness-agent/scripts/verify_agent.py",
+            "skills/deploy-opencode-harness/scripts/verify_agent.py",
             "product_attestation_verifier",
         )
         self.assertTrue(hasattr(module, "verify_image_attestation"))
@@ -327,7 +346,7 @@ class ProductContractTest(unittest.TestCase):
 
     def test_forged_verifier_json_with_another_publication_run_fails_closed(self):
         module = load_module(
-            "skills/deploy-issue-harness-agent/scripts/verify_agent.py",
+            "skills/deploy-opencode-harness/scripts/verify_agent.py",
             "product_attestation_forgery",
         )
         self.assertTrue(hasattr(module, "verify_image_attestation"))
@@ -367,7 +386,7 @@ class ProductContractTest(unittest.TestCase):
 
     def test_attestation_verifier_accepts_only_main_publication_attestations(self):
         module = load_module(
-            "skills/deploy-issue-harness-agent/scripts/verify_agent.py",
+            "skills/deploy-opencode-harness/scripts/verify_agent.py",
             "product_attestation_source_ref_policy",
         )
 
@@ -418,13 +437,13 @@ class ProductContractTest(unittest.TestCase):
 
     def test_worker_activity_schema_is_exact_and_fresh(self):
         module = load_module(
-            "skills/deploy-issue-harness-agent/scripts/verify_agent.py",
+            "skills/deploy-opencode-harness/scripts/verify_agent.py",
             "product_worker_activity_contract",
         )
         self.assertTrue(hasattr(module, "validate_worker_contract"))
         valid = json.loads((
             ROOT
-            / "skills/deploy-issue-harness-agent/assets/contracts/worker-health-v1.healthy.json"
+            / "skills/deploy-opencode-harness/assets/contracts/worker-health-v1.healthy.json"
         ).read_text())
         now = datetime.datetime(2026, 7, 20, 10, 0, 1, tzinfo=datetime.timezone.utc)
         self.assertEqual(module.validate_worker_contract(valid, now=now), [])
@@ -443,7 +462,7 @@ class ProductContractTest(unittest.TestCase):
 
     def test_attestation_verifier_stages_checked_bytes_before_gh_reopens_paths(self):
         module = load_module(
-            "skills/deploy-issue-harness-agent/scripts/verify_agent.py",
+            "skills/deploy-opencode-harness/scripts/verify_agent.py",
             "product_attestation_staging",
         )
         source_commit = "c" * 40
@@ -528,97 +547,9 @@ class ProductContractTest(unittest.TestCase):
                     with self.subTest(dockerfile=dockerfile, line=line):
                         self.assertRegex(line, r"^FROM [^\s]+@sha256:[0-9a-f]{64}(?: AS [a-z0-9_-]+)?$")
 
-    def test_inventory_generators_emit_fresh_exact_hybrid_and_agent_shapes(self):
+    def test_agent_inventory_generator_emits_a_fresh_exact_shape(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
-            hybrid_values = {
-                "source": "coolify-api",
-                "applications": [
-                    {
-                        "applicationUuid": "app-stage",
-                        "projectUuid": "project",
-                        "serverUuid": "server",
-                        "environmentName": "stage",
-                        "name": "service-stage",
-                        "repository": "acme/service",
-                        "branch": "stage",
-                        "domain": "https://stage.example.test",
-                    },
-                    {
-                        "applicationUuid": "app-production",
-                        "projectUuid": "project",
-                        "serverUuid": "server",
-                        "environmentName": "production",
-                        "name": "service-production",
-                        "repository": "acme/service",
-                        "branch": "main",
-                        "domain": "https://example.test",
-                    },
-                ],
-                "databases": [
-                    {
-                        "databaseUuid": f"postgres-{lane}",
-                        "databaseType": "postgresql",
-                        "projectUuid": "project",
-                        "serverUuid": "server",
-                        "environmentName": lane,
-                        "ready": True,
-                        "readinessSource": "coolify-health",
-                    }
-                    for lane in ("stage", "production")
-                ],
-                "convexDeployments": [
-                    {
-                        "capabilityId": "convex",
-                        "lane": lane,
-                        "projectRef": f"convex-project-{lane}",
-                        "deploymentRef": f"convex-deployment-{lane}",
-                        "deploymentType": "permanent",
-                        "deployKeyRef": f"{lane.upper()}_CONVEX_DEPLOY_KEY",
-                        "deployKeyScope": f"convex-deployment-{lane}",
-                        "ready": True,
-                        "readinessSource": "convex-deployment",
-                    }
-                    for lane in ("stage", "production")
-                ],
-                "deliveryEnvironments": [
-                    {
-                        "lane": lane,
-                        "environmentName": lane,
-                        "branch": "stage" if lane == "stage" else "main",
-                        "credentialScope": f"github-environment:{lane}",
-                        "requiredReviewers": 0 if lane == "stage" else 1,
-                        "preventSelfReview": lane == "production",
-                    }
-                    for lane in ("stage", "production")
-                ],
-                "environmentVariables": [],
-            }
-            hybrid_input = root / "hybrid-values.json"
-            hybrid_input.write_text(json.dumps(hybrid_values))
-            generated = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "skills/setup-coolify-cicd/scripts/generate_inventory_fixture.py"),
-                    "--profile",
-                    "hybrid",
-                    "--values-json",
-                    str(hybrid_input),
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(generated.returncode, 0, generated.stderr + generated.stdout)
-            hybrid = json.loads(generated.stdout)
-            self.assertEqual(hybrid["inventoryVersion"], 1)
-            self.assertIn("inventoryId", hybrid)
-            self.assertIn("expiresAt", hybrid)
-            evidence = load_module(
-                "skills/setup-coolify-cicd/harness_evidence.py", "product_hybrid_evidence"
-            )
-            self.assertEqual(evidence.validate_coolify_inventory(hybrid), [])
-
             agent_values = {
                 "source": "coolify-api",
                 "applicationUuid": "agent-app",
@@ -636,7 +567,7 @@ class ProductContractTest(unittest.TestCase):
             generated_agent = subprocess.run(
                 [
                     sys.executable,
-                    str(ROOT / "skills/deploy-issue-harness-agent/scripts/generate_agent_inventory_fixture.py"),
+                    str(ROOT / "skills/deploy-opencode-harness/scripts/generate_agent_inventory_fixture.py"),
                     "--values-json",
                     str(agent_input),
                 ],
@@ -655,12 +586,8 @@ class ProductContractTest(unittest.TestCase):
 
     def test_inventory_value_templates_are_redacted_and_cover_every_profile(self):
         templates = {
-            "skills/setup-coolify-cicd/assets/inventory-values/application.values.example.json": (),
-            "skills/setup-coolify-cicd/assets/inventory-values/nest-postgres.values.example.json": ("databases",),
-            "skills/setup-coolify-cicd/assets/inventory-values/convex.values.example.json": ("convexDeployments",),
-            "skills/setup-coolify-cicd/assets/inventory-values/hybrid.values.example.json": ("databases", "convexDeployments"),
-            "skills/deploy-issue-harness-agent/assets/inventory-values/agent-rollout.values.example.json": ("rolloutHarnessImage",),
-            "skills/deploy-issue-harness-agent/assets/inventory-values/provenance-verification.values.example.json": ("trustedRoot", "sourceRef"),
+            "skills/deploy-opencode-harness/assets/inventory-values/agent-rollout.values.example.json": ("rolloutHarnessImage",),
+            "skills/deploy-opencode-harness/assets/inventory-values/provenance-verification.values.example.json": ("trustedRoot", "sourceRef"),
         }
         for relative, markers in templates.items():
             with self.subTest(template=relative):
@@ -674,20 +601,15 @@ class ProductContractTest(unittest.TestCase):
                 for marker in markers:
                     self.assertIn(marker, payload)
 
-    def test_product_docs_match_opencode_publisher_compiler_and_inventory_contracts(self):
+    def test_product_docs_match_opencode_publisher_and_inventory_contracts(self):
         readme = (ROOT / "README.md").read_text()
-        deploy_skill = (ROOT / "skills/deploy-issue-harness-agent/SKILL.md").read_text()
+        deploy_skill = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
         agent_contract = (
-            ROOT / "skills/deploy-issue-harness-agent/references/agent-contract.md"
+            ROOT / "skills/deploy-opencode-harness/references/agent-contract.md"
         ).read_text()
         image_release = (
-            ROOT / "skills/deploy-issue-harness-agent/references/image-release.md"
+            ROOT / "skills/deploy-opencode-harness/references/image-release.md"
         ).read_text()
-        setup_skill = (ROOT / "skills/setup-coolify-cicd/SKILL.md").read_text()
-        readiness = (
-            ROOT / "skills/setup-coolify-cicd/references/readiness-contract.md"
-        ).read_text()
-
         for stale in (
             "Host Docker socket",
             "получает Docker socket",
@@ -701,10 +623,6 @@ class ProductContractTest(unittest.TestCase):
         self.assertIn("content-addressed", readme)
         self.assertIn("trusted publisher", readme)
         self.assertIn("npm run lint", readme)
-        self.assertIn("schema v2", readme.lower())
-        self.assertIn("generate_inventory_fixture.py", readme)
-        self.assertIn("generate_agent_inventory_fixture.py", readme)
-
         for document in (deploy_skill, agent_contract):
             self.assertNotIn("OPENCODE_AUTH_MODE=broker", document)
             self.assertNotIn("SANDBOX_NETWORK", document)
@@ -726,55 +644,6 @@ class ProductContractTest(unittest.TestCase):
         self.assertIn("alias", image_release.lower())
         self.assertIn("existing main-built digest", image_release)
 
-        self.assertIn("externalAccess", setup_skill)
-        self.assertIn("generate_inventory_fixture.py", setup_skill)
-        self.assertIn("crash-recovery journal", setup_skill)
-        self.assertIn("operator assertion", setup_skill)
-        self.assertIn("schema v2", readiness.lower())
-        self.assertNotIn("issue-agent rollout/provenance evidence", readiness)
-
-        for fragment in ("convex-delivery-jobs.yml", "nest-migration-jobs.yml"):
-            text = (ROOT / "skills/setup-coolify-cicd/assets" / fragment).read_text()
-            self.assertIn("internal", text)
-            self.assertIn("compiler", text)
-            self.assertNotIn("Merge these jobs", text)
-
-    def test_delivery_docs_use_immutable_attested_evidence_lifecycle(self):
-        documents = {
-            "readme": (ROOT / "README.md").read_text(),
-            "skill": (ROOT / "skills/setup-coolify-cicd/SKILL.md").read_text(),
-            "readiness": (
-                ROOT / "skills/setup-coolify-cicd/references/readiness-contract.md"
-            ).read_text(),
-            "coolify": (
-                ROOT / "skills/setup-coolify-cicd/references/coolify-api.md"
-            ).read_text(),
-        }
-        combined = "\n".join(documents.values())
-        for required in (
-            "six canonical workflows",
-            "runId",
-            "artifactId",
-            "GitHub attestation",
-            "deployment-success-v1",
-            "backend-release-v1",
-            "consumption-v1",
-            "bootstrap",
-            "retention",
-        ):
-            self.assertIn(required, combined)
-        for stale in (
-            "оба compiler-generated workflow",
-            "both generated workflows",
-            "durably record the prior verified revision",
-            "read and durably record the current full revision",
-            "--rollback-ref",
-        ):
-            self.assertNotIn(stale, combined)
-        self.assertIn("no raw revision", combined.lower())
-        self.assertIn("expired", combined.lower())
-        self.assertIn("performs no mutation", combined.lower())
-        self.assertIn("normal delivery remains blocked", combined.lower())
 
 
 def _walk_values(value):

@@ -1,6 +1,6 @@
 # Harness
 
-Harness — это дополнение к уже существующему проекту. Оно поднимает OpenCode Web, подключает чат к исходному коду проекта в режиме чтения и превращает GitHub Issues в изменения кода и draft PR в `stage`.
+Harness — это дополнение к уже существующему проекту. Оно публикует защищённый web-интерфейс OpenCode, подключает чат к исходному коду проекта в режиме чтения и превращает GitHub Issues в изменения кода и draft PR в `stage`.
 
 Codex в runtime не используется. OpenCode работает и как чат, и как coding agent.
 
@@ -14,6 +14,8 @@ Codex в runtime не используется. OpenCode работает и к�
 6. trusted publisher — доверенная часть Harness с GitHub-доступом — повторно проверяет артефакт, создаёт ветку `opencode/issue-*` и draft PR в `stage`.
 7. Родительская и дочерняя сессии сохраняются и видны в OpenCode Web.
 
+На этом обычный Issue flow всегда останавливается. Merge выполняется только отдельной authenticated командой: `/merge stage`, `/merge stage #<issue>` или `/merge prod`. Последняя команда продвигает только `stage -> main`; feature-ветка никогда не мержится прямо в `main`.
+
 Если worker задаёт вопрос, Issue переходит в `ai:needs-human`, а сам вопрос появляется в родительском чате. Первое обычное сообщение пользователя передаётся в ту же дочернюю сессию, после чего работа продолжается. Временный сбой GitHub при публикации повторяется автоматически и не запускает написание кода заново.
 
 Для каждого Issue в его исходном месте истории появляется один ответ Harness слева. Пока worker занят, этот ответ показывает компактное анимированное «Размышление» и только текущий процесс. После завершения временный прогресс заменяется обычным текстовым итогом и ссылками на изменения и Pull Request. Вопрос разработчику или техническая ошибка отображаются тем же ответом. Состояние хранится в Harness и восстанавливается после обновления страницы.
@@ -21,6 +23,11 @@ Codex в runtime не используется. OpenCode работает и к�
 На настоящий вопрос worker нужно ответить обычным сообщением в том же чате. После технической ошибки используется явная команда `/retry`, поэтому обычный разговор не запускает код повторно случайно.
 
 Одновременно выполняется только один Issue.
+
+## Два сервиса
+
+- Публичный `harness` принимает HTTPS-трафик, проверяет web-сессию, обслуживает Issue worker, хранит Release App credentials и единственный имеет право создавать и мержить PR.
+- Приватный `opencode-runtime` запускает OpenCode, хранит SQLite и получает model gateway key. Публичного route, GitHub App key, web password и merge authority у него нет.
 
 ## Что где хранится
 
@@ -31,30 +38,29 @@ Codex в runtime не используется. OpenCode работает и к�
 
 Большое количество веток не хранится в chat checkout. Для каждого Issue создаётся отдельный временный клон, а после публикации источником истины снова остаётся GitHub.
 
-## Три скилла
+## Skill
 
 | Skill | Назначение |
 | --- | --- |
-| [`setup-coolify-cicd`](skills/setup-coolify-cicd/SKILL.md) | Проверяет repository contract и привязывает уже существующие `stage`, `main` и Coolify-ресурсы. Ничего не создаёт и не деплоит. |
-| [`deploy-issue-harness-agent`](skills/deploy-issue-harness-agent/SKILL.md) | Разворачивает Issue worker, OpenCode Web, labels, storage и health checks. |
-| [`deploy-opencode-harness`](skills/deploy-opencode-harness/SKILL.md) | Простой общий установщик: запрашивает credentials один раз, вызывает два нижних skill и проверяет полный flow. |
+| [`deploy-opencode-harness`](skills/deploy-opencode-harness/SKILL.md) | Обнаруживает доступный способ развёртывания, настраивает Release App и rulesets, устанавливает два сервиса и проверяет результат. |
 
-Coolify не обязателен для локального теста. В production на Coolify может размещаться сам Harness, но первый skill не создаёт и не деплоит целевое приложение.
+Coolify не обязателен для локального теста. В production размещается только сам Harness; skill не читает, не меняет и не деплоит целевое приложение.
 
 ## Основные компоненты
 
 ```text
-OpenCode Web
-├── обычный чат с read-only контекстом stage
-├── /issue создаёт GitHub Issue
-└── показывает родительские и worker-сессии
-
-Issue Harness
+Public Harness
+├── authenticated web gateway
 ├── опрашивает GitHub Issues
 ├── создаёт дочернюю сессию через OpenCode Server API
 ├── хранит состояние одной активной задачи
-└── передаёт проверенный артефакт trusted publisher
+├── trusted publisher создаёт ветку и draft PR в stage
+└── /merge явно мержит PR в stage или продвигает stage в main
 
+Private opencode-runtime
+├── OpenCode server и SQLite
+├── обычный чат с read-only контекстом stage
+└── model execution и model gateway key
 ```
 
 Для чата и кода используется один gateway:
@@ -65,11 +71,11 @@ VOID_AI_API_KEY=<секретный ключ>
 VOID_AI_MODEL_ID=<точный ID модели, доступной через gateway>
 ```
 
-`VOID_AI_API_KEY` передаётся только OpenCode Web. Harness не получает ключ модели.
+`VOID_AI_API_KEY` передаётся только приватному `opencode-runtime`. Публичный `harness` не получает ключ модели.
 
 ## Локальная проверка на Windows
 
-Используйте отдельный тестовый GitHub-репозиторий. В нём должны уже существовать ветки `stage` и `main`. Установите GitHub App только на этот репозиторий и выдайте ей Metadata read-only, Contents read/write, Issues read/write и Pull requests read/write.
+Используйте отдельный тестовый GitHub-репозиторий. Ветка `main` должна существовать. Установщик создаёт отсутствующую `stage` один раз на текущем SHA `main`; существующую `stage` он не reset'ит и не заменяет. Установите GitHub App только на этот репозиторий и выдайте ей Metadata read-only, Contents read/write, Issues read/write, Pull requests read/write и Checks read-only без Administration.
 
 1. Создайте локальный env-файл:
 
@@ -123,7 +129,8 @@ VOID_AI_MODEL_ID=<точный ID модели, доступной через ga
    - в OpenCode Web появилась worker-сессия;
    - появилась ветка `opencode/issue-<номер>-...`;
    - создан draft PR в `stage`;
-   - Issue получил `ai:finished` и ссылку на PR.
+   - Issue получил `ai:finished` и ссылку на PR;
+   - PR остаётся draft и не мержится без отдельной `/merge` команды.
 
 9. Остановка:
 
@@ -152,24 +159,11 @@ npm.cmd exec -w services/issue-harness -- tsx --test test/env.test.ts test/openc
 node --test opencode/test/issue.test.mjs
 ```
 
-## Repository delivery contract
-
-Первый skill сохраняет существующую систему delivery и использует canonical schema v2 в `.harness/config.json`. Он может установить проверенные CI/CD-файлы, но не создаёт ветки, Coolify applications, databases или deployments.
-
-Для offline plan и свежего inventory используются:
-
-```text
-skills/setup-coolify-cicd/scripts/generate_inventory_fixture.py
-skills/deploy-issue-harness-agent/scripts/generate_agent_inventory_fixture.py
-```
-
-Production delivery использует GitHub attestation и immutable evidence с полями `runId` и `artifactId`. Контракты `deployment-success-v1`, `backend-release-v1` и `consumption-v1`, bootstrap и retention описаны в setup skill. Истёкшее или отсутствующее evidence блокирует изменение; no raw revision не является разрешением на deployment. Инициализация без подтверждённого состояния performs no mutation, а normal delivery remains blocked до отдельного подтверждения.
-
 ## Безопасность
 
 - Не храните credentials в Git.
-- Не передавайте `VOID_AI_API_KEY`, GitHub token или Coolify credentials в Harness или GitHub.
-- `VOID_AI_API_KEY` получает только OpenCode Web; GitHub App PEM получает только Harness.
+- Не передавайте `VOID_AI_API_KEY`, GitHub token или server credentials в GitHub или coding sessions.
+- `VOID_AI_API_KEY` получает только приватный `opencode-runtime`; GitHub App PEM получает только публичный `harness`.
 - В production используйте pinned digests для Issue Harness и OpenCode Web.
 - Sandcastle, model broker и Docker socket в этой архитектуре отсутствуют.
-- `stage` и `main` никогда не создаются, не reset'ятся и не force-push'ятся этими skills.
+- `main` никогда не создаётся. Отсутствующая `stage` создаётся один раз на текущем SHA `main`; существующие ветки никогда не reset'ятся и не force-push'ятся skill.

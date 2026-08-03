@@ -12,6 +12,7 @@ if [[ "$data_dir" != "$resolved_data_dir" || "$resolved_data_dir" != /opt/issue-
   exit 1
 fi
 harden_harness_runtime "$data_dir"
+umask 0007
 
 exec {harness_lock_fd}>"$data_dir/process.lock"
 chmod 600 "$data_dir/process.lock"
@@ -27,8 +28,9 @@ npm run start -w services/issue-harness &
 worker_pid=$!
 
 stop_worker() {
+  trap - TERM INT
   kill -TERM "$worker_pid" 2>/dev/null || true
-  wait "$worker_pid" || true
+  wait "$worker_pid" 2>/dev/null || true
   exit 143
 }
 trap stop_worker TERM INT

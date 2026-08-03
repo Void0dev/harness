@@ -6,7 +6,7 @@ import { startHealthServer } from "../src/health.js";
 
 const workerContractDirectory = path.resolve(
   import.meta.dirname,
-  "../../../skills/deploy-issue-harness-agent/assets/contracts",
+  "../../../skills/deploy-opencode-harness/assets/contracts",
 );
 
 async function addressFor(options: Parameters<typeof startHealthServer>[0]) {

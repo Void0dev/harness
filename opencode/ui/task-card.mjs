@@ -7,7 +7,7 @@ export function sessionIdFromPath(pathname) {
 
 export function visibleCommandText(value) {
   const text = String(value ?? "").replace(/\s*<!--\s*opencode-harness-issue:\s*\d+\s*-->\s*$/i, "").trim();
-  const command = /(?:^Issue #\d+:\s*|(?:^|\n\n))(\/(?:issue|retry)(?:\s+[\s\S]*)?)$/i.exec(text)?.[1];
+  const command = /(?:^Issue #\d+:\s*|(?:^|\n\n))(\/(?:issue|retry|merge)(?:\s+[\s\S]*)?)$/i.exec(text)?.[1];
   return command?.trim();
 }
 

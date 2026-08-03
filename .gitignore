@@ -10,9 +10,6 @@ dist/
 .DS_Store
 .harness/*
 !.harness/config.json
-!.harness/coolify_client.py
-!.harness/deploy_exact_revision.py
-!.harness/evidence_ledger.py
 .omx/
 .sandcastle/
 *.log

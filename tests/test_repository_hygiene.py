@@ -33,6 +33,26 @@ def git(*args):
 
 
 class RepositoryHygieneTest(unittest.TestCase):
+    def test_removed_skill_name_is_absent_from_discoverable_metadata_and_docs(self):
+        listed = git("ls-files", "--cached", "--others", "--exclude-standard")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        allowed = {
+            pathlib.Path("tests/test_repository_hygiene.py"),
+            pathlib.Path("tests/test_skills.py"),
+        }
+        stale = []
+        for relative in map(pathlib.Path, listed.stdout.splitlines()):
+            path = ROOT / relative
+            if relative in allowed or not path.is_file() or "__pycache__" in path.parts:
+                continue
+            content = path.read_bytes()
+            if b"\0" in content:
+                continue
+            if b"deploy-issue-harness-agent" in content:
+                stale.append(str(relative))
+
+        self.assertEqual(stale, [])
+
     def test_docker_build_context_excludes_runtime_and_credential_material(self):
         patterns = {
             line.strip()
@@ -104,12 +124,9 @@ class RepositoryHygieneTest(unittest.TestCase):
                 result = git("check-ignore", "--no-index", "-q", candidate)
                 self.assertEqual(result.returncode, 0, candidate)
 
-    def test_declarative_contract_and_reviewed_helpers_remain_trackable(self):
+    def test_declarative_contract_remains_trackable(self):
         trackable_paths = [
             ".harness/config.json",
-            ".harness/coolify_client.py",
-            ".harness/deploy_exact_revision.py",
-            ".harness/evidence_ledger.py",
             ".env.example",
             "services/example/.env.example",
         ]
@@ -125,9 +142,6 @@ class RepositoryHygieneTest(unittest.TestCase):
         tracked = [path for path in result.stdout.split("\0") if path]
         allowed_harness = {
             ".harness/config.json",
-            ".harness/coolify_client.py",
-            ".harness/deploy_exact_revision.py",
-            ".harness/evidence_ledger.py",
         }
         forbidden = []
         for filename in tracked:
@@ -164,17 +178,19 @@ class RepositoryHygieneTest(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "Unix permission semantics are verified on Linux")
     def test_runtime_permissions_are_private(self):
-        runtime_directories = [
+        private_directories = [
             "logs",
             "state",
-            "runs",
             "artifacts",
             "publishers",
+        ]
+        shared_directories = [
+            "runs",
             "context",
         ]
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = pathlib.Path(temporary) / "repository"
-            for relative in runtime_directories:
+            for relative in private_directories + shared_directories:
                 directory = data_dir / relative
                 directory.mkdir(parents=True, mode=0o755)
                 directory.chmod(0o755)
@@ -198,10 +214,15 @@ class RepositoryHygieneTest(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(data_dir.stat().st_mode), 0o700)
 
-            for relative in runtime_directories:
+            for relative in private_directories:
                 with self.subTest(directory=relative):
                     mode = stat.S_IMODE((data_dir / relative).stat().st_mode)
                     self.assertEqual(mode, 0o700)
+
+            for relative in shared_directories:
+                with self.subTest(shared_directory=relative):
+                    mode = stat.S_IMODE((data_dir / relative).stat().st_mode)
+                    self.assertEqual(mode, 0o2770)
 
     @unittest.skipIf(os.name == "nt", "Unix permission semantics are verified on Linux")
     def test_base64_github_app_secret_becomes_private_temporary_file(self):
