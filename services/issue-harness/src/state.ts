@@ -22,6 +22,9 @@ export type IssueRunState = {
   baseSha?: string;
   awaitingAction?: "resume_child" | "retry_publish" | "rerun";
   pendingHumanReply?: string;
+  humanQuestionCommentId?: number;
+  humanLatestCommentId?: number;
+  humanCommentResumeAfter?: string;
   taskView?: TaskView;
   publicationArtifact?: PublicationArtifactReference;
   stalePublicationArtifacts?: StalePublicationArtifact[];
@@ -235,6 +238,20 @@ function validateRunState(value: unknown): IssueRunState {
     || state.pendingHumanReply.trim().length === 0
     || state.pendingHumanReply.length > 16_000
   )) throw new Error("Invalid pending human reply");
+  if (state.humanQuestionCommentId !== undefined && (
+    !Number.isSafeInteger(state.humanQuestionCommentId)
+    || state.humanQuestionCommentId <= 0
+  )) throw new Error("Invalid human question comment ID");
+  if (state.humanLatestCommentId !== undefined && (
+    state.humanQuestionCommentId === undefined
+    || !Number.isSafeInteger(state.humanLatestCommentId)
+    || state.humanLatestCommentId <= state.humanQuestionCommentId
+  )) throw new Error("Invalid latest human comment ID");
+  if (state.humanCommentResumeAfter !== undefined && (
+    state.humanLatestCommentId === undefined
+    || typeof state.humanCommentResumeAfter !== "string"
+    || Number.isNaN(Date.parse(state.humanCommentResumeAfter))
+  )) throw new Error("Invalid human comment resume time");
   if (state.taskView !== undefined) state.taskView = sanitizeTaskView(state.taskView);
   return state as IssueRunState;
 }
