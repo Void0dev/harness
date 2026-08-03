@@ -116,9 +116,10 @@ class ProductContractTest(unittest.TestCase):
         entry = (ROOT / "opencode/web-entry.mjs").read_text()
         self.assertIn("WORKDIR /home/opencode/workspace", dockerfile)
         self.assertIn(
-            "./.local-harness/context:/home/opencode/workspace:ro",
+            "./.local-harness/context:/home/opencode/workspace",
             compose,
         )
+        self.assertNotIn("./.local-harness/context:/home/opencode/workspace:ro", compose)
         self.assertIn('CMD ["node", "/opt/opencode/web-entry.mjs"]', dockerfile)
         self.assertIn("Buffer.from(projectDirectory, \"utf8\").toString(\"base64url\")", entry)
         self.assertIn("location: projectRoute", entry)
@@ -172,7 +173,7 @@ class ProductContractTest(unittest.TestCase):
         self.assertNotIn("ports:", compose)
         self.assertIn("cap_drop:\n      - ALL", compose)
         self.assertIn("harness-context:", compose)
-        self.assertIn("read_only: true", compose)
+        self.assertNotIn("target: /opt/issue-harness/data/context\n        read_only: true", compose)
         self.assertIn("harness-runs:", compose)
         self.assertIn("opencode-state-v2:", compose)
 
@@ -617,10 +618,12 @@ class ProductContractTest(unittest.TestCase):
         self.assertNotIn("publishArtifact", harness_index)
         self.assertNotIn("MergeService", harness_index)
         self.assertIn("coding agent", combined)
-        self.assertIn("release agent", combined)
+        self.assertIn("standard OpenCode", combined)
+        self.assertNotIn("release agent", combined)
         self.assertIn("`gh`", combined)
         self.assertIn("harness-github", readme)
-        self.assertIn("release agent", readme)
+        self.assertIn("standard `build` agent", readme)
+        self.assertNotIn("release agent", readme)
         for stale in (
             "trusted publisher",
             "content-addressed artifact",

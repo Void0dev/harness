@@ -1,8 +1,8 @@
 # Harness
 
-Harness — это дополнение к уже существующему проекту. Оно публикует защищённый web-интерфейс OpenCode, подключает чат к исходному коду проекта в режиме чтения и превращает GitHub Issues в изменения кода и draft PR в `stage`.
+Harness — это дополнение к уже существующему проекту. Оно публикует защищённый web-интерфейс OpenCode, открывает исходный код проекта как writable workspace и превращает GitHub Issues в изменения кода и draft PR в `stage`.
 
-Codex в runtime не используется. OpenCode работает и как чат, и как coding agent.
+Codex в runtime не используется. Один standard `build` agent OpenCode работает как чат, coding agent и GitHub operator: он может читать и менять код, запускать команды, делать commit/push/PR и выполнять явно запрошенный merge. Реальные ограничения задаются permissions Release App и GitHub rulesets.
 
 ## Как выглядит один сценарий
 
@@ -10,11 +10,11 @@ Codex в runtime не используется. OpenCode работает и к�
 2. Команда `/issue <текст>` создаёт GitHub Issue с label `ai:todo` и сохраняет ID родительской чат-сессии.
 3. Harness замечает Issue и создаёт дочернюю OpenCode-сессию.
 4. Дочерняя сессия работает в отдельном временном клоне `stage`, меняет код и запускает проверки.
-5. Coding agent коммитит изменения, получает короткоживущий Release App installation token через `harness-github`, push'ит ветку `opencode/issue-*` и создаёт или переиспользует draft PR в `stage`.
+5. Standard OpenCode coding agent коммитит изменения, получает короткоживущий Release App installation token через `harness-github`, push'ит ветку `opencode/issue-*` и создаёт или переиспользует draft PR в `stage`.
 6. Harness проверяет, что ожидаемый открытый draft PR действительно появился, сохраняет ссылку и завершает Issue.
 7. Родительская и дочерняя сессии сохраняются и видны в OpenCode Web.
 
-На этом обычный Issue flow всегда останавливается. Merge выполняется только отдельной authenticated командой: `/merge stage`, `/merge stage #<issue>` или `/merge prod`. Команда запускает обычный `release agent`, который читает текущее состояние GitHub и работает через `harness-github gh`. `/merge prod` создаёт или переиспользует только PR `stage -> main`; feature-ветка никогда не мержится прямо в `main`.
+На этом обычный Issue flow всегда останавливается. `/merge stage`, `/merge stage #<issue>` и `/merge prod` — обычные command prompts для того же standard `build` agent, который читает текущее состояние GitHub и работает через `harness-github gh`. Harness не содержит merge service и не отделяет merge в специальную роль. `/merge prod` создаёт или переиспользует только PR `stage -> main`; возможность фактического merge определяется GitHub App permissions и rulesets.
 
 Если worker задаёт вопрос, Issue переходит в `ai:needs-human`, а сам вопрос появляется в родительском чате. Первое обычное сообщение пользователя передаётся в ту же дочернюю сессию, после чего работа продолжается. Если commit, push или создание PR не завершились, `/retry` продолжает ту же дочернюю сессию и агент повторяет GitHub-операцию без отдельного publisher pipeline.
 
@@ -27,17 +27,17 @@ Codex в runtime не используется. OpenCode работает и к�
 ## Два сервиса
 
 - Публичный `harness` принимает HTTPS-трафик, проверяет web-сессию, опрашивает Issues, запускает child sessions и проверяет созданные PR.
-- Приватный `opencode-runtime` запускает OpenCode, coding agent и release agent, хранит SQLite и получает model gateway key.
+- Приватный `opencode-runtime` запускает единый standard OpenCode `build` agent, хранит SQLite и получает model gateway key.
 - Оба сервиса получают credentials одной repository-scoped Release App. Runtime использует их только через `harness-github`, который выпускает короткоживущий installation token отдельно для каждой команды; web password и session-signing secret остаются только в `harness`, model key — только в runtime.
 
 ## Что где хранится
 
-- `$HARNESS_DATA_DIR/context` — отдельный checkout ветки `stage` только для чтения в чате. Он периодически обновляется.
+- `$HARNESS_DATA_DIR/context` — persistent writable project workspace. При первом запуске Harness клонирует `stage`; при следующих стартах fast-forward выполняется только для чистой `stage`, а локальная ветка и незакоммиченные изменения сохраняются.
 - `$HARNESS_DATA_DIR/opencode` — постоянная история OpenCode-сессий.
 - `$HARNESS_DATA_DIR/workspaces` и `$HARNESS_DATA_DIR/runs` — временные рабочие копии и данные запусков.
 - GitHub — Issues, ветки и pull requests.
 
-Большое количество веток не хранится в chat checkout. Для каждого Issue создаётся отдельный временный клон, а после push и создания PR источником истины снова остаётся GitHub.
+Для каждого Issue создаётся отдельный временный клон, поэтому автоматическая Issue-работа не вмешивается в основной project workspace. После push и создания PR источником истины для Issue flow снова остаётся GitHub.
 
 ## Skill
 
@@ -59,9 +59,9 @@ Public Harness
 
 Private opencode-runtime
 ├── OpenCode server и SQLite
-├── обычный чат с read-only контекстом stage
-├── coding agent: commit, push, draft PR в stage
-├── release agent: явный merge в stage или promotion stage -> main
+├── writable checkout project repository
+├── standard build agent: chat, edit, tests, commit, push и PR
+├── /merge command prompts: merge в stage или promotion stage -> main
 └── model execution, model gateway key и harness-github
 ```
 
@@ -117,7 +117,7 @@ VOID_AI_MODEL_ID=<точный ID модели, доступной через ga
 
 5. Откройте `http://localhost:4096` и войдите с username `opencode` и паролем из `OPENCODE_SERVER_PASSWORD`.
 
-6. Сначала задайте обычный вопрос о тестовом проекте. Чат должен читать код, но не менять файлы.
+6. Сначала задайте обычный вопрос о тестовом проекте. Standard OpenCode agent должен видеть repository в workspace и уметь читать и менять файлы.
 
 7. В том же чате отправьте:
 

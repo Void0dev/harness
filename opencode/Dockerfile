@@ -30,8 +30,7 @@ RUN ln -s /opt/opencode/lib/harness-github.mjs /usr/local/bin/harness-github \
 USER opencode
 ENV HOME=/home/opencode \
     XDG_CONFIG_HOME=/home/opencode/.config \
-    XDG_DATA_HOME=/home/opencode/.local/share \
-    OPENCODE_PROFILE=web
+    XDG_DATA_HOME=/home/opencode/.local/share
 WORKDIR /home/opencode/workspace
 EXPOSE 4096
 ENTRYPOINT ["node", "/opt/opencode/render-config.mjs"]

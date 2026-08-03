@@ -64,7 +64,7 @@ services:
     volumes:
       - ${GITHUB_APP_PRIVATE_KEY_HOST_PATH:?set the GitHub App private key path}:/run/secrets/github-app.pem:ro
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/opencode:/home/opencode/.local/share/opencode
-      - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/context:/home/opencode/workspace:ro
+      - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/context:/home/opencode/workspace
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/runs:${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/runs
     init: true
     cpus: ${OPENCODE_CPU_LIMIT:-2}

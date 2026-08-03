@@ -65,7 +65,7 @@ test("creates a child session, submits asynchronously, and reads the result afte
     title: "Issue #7: fix login",
   });
   const prompt = requests.find((request) => new URL(request.url).pathname.endsWith("/prompt_async"));
-  assert.equal(JSON.parse(String(prompt?.init.body)).agent, "harness-worker");
+  assert.equal(JSON.parse(String(prompt?.init.body)).agent, "build");
   assert.equal(prompt?.init.method, "POST");
   assert.match(String((requests[0].init.headers as Record<string, string>).Authorization), /^Bearer /);
   assert.ok(progressParts.some((parts) => JSON.stringify(parts).includes("src/login.ts")));

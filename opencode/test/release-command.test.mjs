@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
 
-test("merge is a normal release-agent command with constrained release flows", async () => {
+test("merge runs through the standard build agent with constrained release flows", async () => {
   const command = await fs.readFile("opencode/web-config/commands/merge.md", "utf8");
-  assert.match(command, /^---\n[\s\S]*\nagent: release\n---\n/);
+  assert.match(command, /^---\n[\s\S]*\nagent: build\n---\n/);
+  assert.doesNotMatch(command, /release agent|release-agent/i);
   assert.match(command, /harness-github gh pr ready/);
   assert.match(command, /harness-github gh pr merge .*--auto --merge/);
   assert.match(command, /stage.*main|main.*stage/s);

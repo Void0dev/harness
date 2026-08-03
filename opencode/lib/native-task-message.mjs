@@ -161,7 +161,7 @@ function cleanupSyntheticCommandUsers(db, sessionID) {
     const userData = {
       role: "user",
       time: { created: Number(replacement.time_created) },
-      agent: "chat",
+      agent: "build",
       model: replacementData.model ?? syntheticData.model ?? { providerID: "void", modelID: "unknown" },
       summary: syntheticData.summary ?? replacementData.summary ?? { diffs: [] },
     };
@@ -304,7 +304,7 @@ function normalizeStandaloneSystemMessages(db, sessionID, projectDirectory) {
       parentID: parent.id,
       role: "assistant",
       mode: "chat",
-      agent: "chat",
+      agent: "build",
       path: { cwd: projectDirectory, root: projectDirectory },
       cost: 0,
       tokens: { total: 0, input: 0, output: 0, reasoning: 0, cache: { write: 0, read: 0 } },
@@ -414,7 +414,7 @@ function materializeOne(db, parentSessionId, task, projectDirectory) {
     parentID: anchor.id,
     role: "assistant",
     mode: "chat",
-    agent: "chat",
+    agent: "build",
     path: { cwd: projectDirectory, root: projectDirectory },
     cost: 0,
     tokens: { total: 0, input: 0, output: 0, reasoning: 0, cache: { write: 0, read: 0 } },
@@ -556,7 +556,7 @@ function upsertCommandReply(db, row, text, task, projectDirectory, updatedAt) {
     parentID: row.message_id,
     role: "assistant",
     mode: "chat",
-    agent: "chat",
+    agent: "build",
     path: { cwd: projectDirectory, root: projectDirectory },
     cost: 0,
     tokens: { total: 0, input: 0, output: 0, reasoning: 0, cache: { write: 0, read: 0 } },
@@ -597,7 +597,7 @@ function normalizeLegacySystemMessages(db, sessionID, task, anchor, projectDirec
       parentID: anchor.id,
       role: "assistant",
       mode: "chat",
-      agent: "chat",
+      agent: "build",
       path: { cwd: projectDirectory, root: projectDirectory },
       cost: 0,
       tokens: { total: 0, input: 0, output: 0, reasoning: 0, cache: { write: 0, read: 0 } },
@@ -628,7 +628,7 @@ function createDirectIssueAnchor(db, sessionID, task) {
   const suffix = crypto.createHash("sha256").update(`${sessionID}:${task.issueNumber}:user`).digest("hex").slice(0, 24);
   const id = `msg_harness_user_${suffix}`;
   const partID = `prt_harness_user_${suffix}`;
-  const data = { role: "user", time: { created: createdAt }, agent: "chat", model: { providerID: "void", modelID: safeText(task.modelId, 128) ?? "unknown" }, summary: { diffs: [] } };
+  const data = { role: "user", time: { created: createdAt }, agent: "build", model: { providerID: "void", modelID: safeText(task.modelId, 128) ?? "unknown" }, summary: { diffs: [] } };
   const text = { type: "text", text: `GitHub Issue #${task.issueNumber}: ${task.title}` };
   upsertJson(db, "message", id, { sessionID, createdAt, updatedAt: createdAt, data });
   upsertJson(db, "part", partID, { sessionID, messageID: id, createdAt, updatedAt: createdAt, data: text });

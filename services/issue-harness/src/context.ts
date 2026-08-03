@@ -5,24 +5,14 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-type RefreshContextOptions = {
+type ProjectWorkspaceOptions = {
   contextDir: string;
   remoteUrl: string;
   baseBranch: string;
   gitEnv?: NodeJS.ProcessEnv;
 };
 
-export function withFreshContext<T, R>(
-  refresh: () => Promise<unknown>,
-  next: (input: T) => Promise<R>,
-) {
-  return async (input: T) => {
-    await refresh();
-    return next(input);
-  };
-}
-
-export async function refreshContextCheckout(options: RefreshContextOptions) {
+export async function prepareProjectWorkspace(options: ProjectWorkspaceOptions) {
   const contextDir = path.resolve(options.contextDir);
   if (contextDir === path.parse(contextDir).root) {
     throw new Error("Context checkout must not use a filesystem root");
@@ -40,16 +30,44 @@ export async function refreshContextCheckout(options: RefreshContextOptions) {
     await fs.access(gitDirectory);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    await git(parent, options.gitEnv, "clone", "--no-checkout", "--single-branch", "--branch", options.baseBranch, options.remoteUrl, contextDir);
+    await git(parent, options.gitEnv, "clone", "--single-branch", "--branch", options.baseBranch, options.remoteUrl, contextDir);
   }
 
   await git(contextDir, options.gitEnv, "fetch", "--prune", "origin", options.baseBranch);
-  await git(contextDir, options.gitEnv, "checkout", "--detach", `origin/${options.baseBranch}`);
-  await git(contextDir, options.gitEnv, "reset", "--hard", `origin/${options.baseBranch}`);
-  await git(contextDir, options.gitEnv, "clean", "-fdx");
   await git(contextDir, options.gitEnv, "config", "core.hooksPath", path.join(contextDir, ".git", "disabled-hooks"));
+  await git(contextDir, options.gitEnv, "config", "core.sharedRepository", "group");
+  await git(contextDir, options.gitEnv, "config", "user.name", "OpenCode");
+  await git(contextDir, options.gitEnv, "config", "user.email", "opencode@users.noreply.github.com");
+
+  let branch = (await git(contextDir, options.gitEnv, "branch", "--show-current")).trim();
+  const clean = (await git(contextDir, options.gitEnv, "status", "--porcelain=v1", "--untracked-files=all")).trim() === "";
+  const remote = `origin/${options.baseBranch}`;
+  if (!branch && clean) {
+    const [head, remoteHead] = await Promise.all([
+      git(contextDir, options.gitEnv, "rev-parse", "HEAD"),
+      git(contextDir, options.gitEnv, "rev-parse", remote),
+    ]);
+    if (head.trim() === remoteHead.trim()) {
+      await git(contextDir, options.gitEnv, "switch", "-C", options.baseBranch, remote);
+      await git(contextDir, options.gitEnv, "branch", "--set-upstream-to", remote, options.baseBranch);
+      branch = options.baseBranch;
+    }
+  }
+
+  let updated = false;
+  if (branch === options.baseBranch && clean) {
+    const before = (await git(contextDir, options.gitEnv, "rev-parse", "HEAD")).trim();
+    try {
+      await git(contextDir, options.gitEnv, "merge-base", "--is-ancestor", before, remote);
+      await git(contextDir, options.gitEnv, "merge", "--ff-only", remote);
+      updated = before !== (await git(contextDir, options.gitEnv, "rev-parse", "HEAD")).trim();
+    } catch (error) {
+      if ((error as { code?: number | string }).code !== 1) throw error;
+      // Preserve local commits and let the standard OpenCode agent resolve divergence.
+    }
+  }
   const revision = (await git(contextDir, options.gitEnv, "rev-parse", "HEAD")).trim();
-  return { contextDir, revision };
+  return { contextDir, revision, updated };
 }
 
 async function git(cwd: string, extraEnv: NodeJS.ProcessEnv | undefined, ...args: string[]) {

@@ -66,7 +66,7 @@ services:
         target: /run/secrets/void-ai-api-key
     volumes:
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/opencode:/home/opencode/.local/share/opencode
-      - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/context:/home/opencode/workspace:ro
+      - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/context:/home/opencode/workspace
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/runs:${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/runs
       - ${GITHUB_APP_PRIVATE_KEY_HOST_PATH:?set the GitHub App private key path}:/run/secrets/github-app.pem:ro
     init: true

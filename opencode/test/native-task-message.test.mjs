@@ -41,12 +41,12 @@ test("materializes the child final answer and native diffs into the parent turn 
     insertSession(db, child, "GitHub Issue #57 worker", "/runs/issue-57", parent);
     insertMessage(db, {
       id: "msg_parent_12345678", sessionId: parent, createdAt: 1_000,
-      data: { role: "user", time: { created: 1_000 }, agent: "chat", model: { providerID: "void", modelID: "gpt-5.5" }, summary: { diffs: [] } },
+      data: { role: "user", time: { created: 1_000 }, agent: "build", model: { providerID: "void", modelID: "gpt-5.5" }, summary: { diffs: [] } },
       parts: [{ type: "text", text: "Issue #57: /issue Исправь вход" }],
     });
     insertMessage(db, {
       id: "msg_progress_12345678", sessionId: parent, createdAt: 1_500,
-      data: { role: "user", time: { created: 1_500 }, agent: "chat", model: { providerID: "void", modelID: "gpt-5.5" } },
+      data: { role: "user", time: { created: 1_500 }, agent: "build", model: { providerID: "void", modelID: "gpt-5.5" } },
       parts: [{ type: "text", text: "Issue #57: пишу код и запускаю необходимые проверки…" }],
     });
     const diffs = [{ file: "src/login.ts", patch: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1, status: "modified" }];
@@ -200,7 +200,7 @@ test("keeps the exact user command and adds a native assistant reply for a busy 
     insertSession(db, parent, "Project chat", "/workspace");
     insertMessage(db, {
       id: "msg_user_12345678", sessionId: parent, createdAt: 1_000,
-      data: { role: "user", time: { created: 1_000 }, agent: "chat", model: { providerID: "void", modelID: "gpt-5.5" } },
+      data: { role: "user", time: { created: 1_000 }, agent: "build", model: { providerID: "void", modelID: "gpt-5.5" } },
       parts: [{ type: "text", text: "/issue ещё одна задача" }],
     });
 
@@ -315,12 +315,12 @@ test("keeps a rejected command exact and moves its system response to the assist
     insertSession(db, parent, "Project chat", "/workspace");
     insertMessage(db, {
       id: "msg_busy_12345678", sessionId: parent, createdAt: 1_000,
-      data: { role: "user", time: { created: 1_000 }, agent: "chat", model: { providerID: "void", modelID: "gpt-5.5" } },
+      data: { role: "user", time: { created: 1_000 }, agent: "build", model: { providerID: "void", modelID: "gpt-5.5" } },
       parts: [{ type: "text", text: "Harness временно недоступен.\n\n/issue Исправь вход" }],
     });
     insertMessage(db, {
       id: "msg_old_error_12345678", sessionId: parent, createdAt: 1_500,
-      data: { role: "user", time: { created: 1_500 }, agent: "chat", model: { providerID: "void", modelID: "gpt-5.5" } },
+      data: { role: "user", time: { created: 1_500 }, agent: "build", model: { providerID: "void", modelID: "gpt-5.5" } },
       parts: [{ type: "text", text: "Нельзя создать новый Issue: другая задача уже выполняется." }],
     });
 
@@ -347,7 +347,7 @@ test("removes a generated reply whose parent was migrated from a system error to
     insertSession(db, parent, "Project chat", "/workspace");
     insertMessage(db, {
       id: "msg_real_user_12345678", sessionId: parent, createdAt: 1_000,
-      data: { role: "user", time: { created: 1_000 }, agent: "chat", model: { providerID: "void", modelID: "gpt-5.5" } },
+      data: { role: "user", time: { created: 1_000 }, agent: "build", model: { providerID: "void", modelID: "gpt-5.5" } },
       parts: [{ type: "text", text: "Какого цвета фон?" }],
     });
     insertMessage(db, {
@@ -405,7 +405,7 @@ test("recovers a legacy command in place without appending an artificial user tu
     insertSession(db, child, "Issue #9: Красный фон", "/runs/issue-9", parent);
     insertMessage(db, {
       id: "msg_legacy_12345678", sessionId: parent, createdAt: 1_000,
-      data: { role: "user", time: { created: 1_000 }, agent: "chat", model: { providerID: "void", modelID: "gpt-5.5" } },
+      data: { role: "user", time: { created: 1_000 }, agent: "build", model: { providerID: "void", modelID: "gpt-5.5" } },
       parts: [{ type: "text", text: "Issue #9 принят. Изучаю код и готовлю изменения…" }],
     });
     insertMessage(db, {

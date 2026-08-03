@@ -27,7 +27,6 @@ services:
       HARNESS_HEALTH_DETAILS_TOKEN: ${HARNESS_HEALTH_DETAILS_TOKEN:?set a 32+ character diagnostics token}
       HARNESS_DATA_DIR: /opt/issue-harness/data
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
-      CONTEXT_REFRESH_SECONDS: ${CONTEXT_REFRESH_SECONDS:-60}
       WORKSPACE_RETENTION_HOURS: ${WORKSPACE_RETENTION_HOURS:-24}
       MAX_CONCURRENT_RUNS: "1"
       HEALTH_PORT: "3000"
@@ -98,7 +97,6 @@ services:
       - type: volume
         source: harness-context
         target: /opt/issue-harness/data/context
-        read_only: true
       - type: volume
         source: harness-runs
         target: /opt/issue-harness/data/runs

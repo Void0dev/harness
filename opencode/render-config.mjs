@@ -4,8 +4,6 @@ import path from "node:path";
 
 if (process.env.OPENCODE_RUNTIME_MODE === "private") process.umask(0o007);
 
-const profile = process.env.OPENCODE_PROFILE ?? "web";
-if (!new Set(["web", "worker"]).has(profile)) throw new Error("OPENCODE_PROFILE must be web or worker");
 const baseURL = process.env.VOID_AI_BASE_URL ?? "https://ai-gateway.void0.org/v1";
 const parsedBaseURL = new URL(baseURL);
 if (!new Set(["http:", "https:"]).has(parsedBaseURL.protocol) || parsedBaseURL.username || parsedBaseURL.password) {
@@ -66,64 +64,22 @@ const configRoot = process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? 
 const configDir = path.join(configRoot, "opencode");
 await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
 
-const disabledBuiltins = {
-  build: { disable: true },
-  plan: { disable: true },
-  general: { disable: true },
-  explore: { disable: true },
-  scout: { disable: true },
+const agents = {
+  build: {
+    description: "Standard OpenCode agent for chat, coding, GitHub operations, and explicit releases",
+    mode: "primary",
+    permission: {
+      "*": "allow",
+      external_directory: "deny",
+    },
+  },
 };
-const agents = profile === "web"
-  ? {
-      ...disabledBuiltins,
-      chat: {
-        description: "Read-only assistant for discussing the connected application",
-        mode: "primary",
-        permission: {
-          "*": "allow",
-          edit: "deny",
-          bash: "deny",
-          task: "deny",
-          external_directory: "deny",
-        },
-      },
-      release: {
-        description: "GitHub release operator for explicit stage and production merge commands",
-        mode: "primary",
-        permission: {
-          "*": "allow",
-          edit: "deny",
-          bash: "allow",
-          task: "deny",
-          external_directory: "deny",
-        },
-      },
-      "harness-worker": {
-        description: "Child-session coding worker for a GitHub Issue",
-        mode: "primary",
-        permission: {
-          "*": "allow",
-          external_directory: "deny",
-        },
-      },
-    }
-  : {
-      ...disabledBuiltins,
-      "harness-worker": {
-        description: "Internal OpenCode Harness coding worker",
-        mode: "primary",
-        permission: {
-          "*": "allow",
-          external_directory: "deny",
-        },
-      },
-    };
 
 const config = {
   $schema: "https://opencode.ai/config.json",
   enabled_providers: Object.keys(providers),
   model: `${defaultProviderID}/${defaultModelID}`,
-  default_agent: profile === "web" ? "chat" : "harness-worker",
+  default_agent: "build",
   provider: providers,
   agent: agents,
 };

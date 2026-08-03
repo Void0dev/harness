@@ -11,7 +11,7 @@ test("turns /issue into an immediate native no-reply user message", () => {
       command: "issue",
       arguments: "поменяй фон на чёрный",
       messageID: "msg_user_12345678",
-      agent: "chat",
+      agent: "build",
       model: { providerID: "void", modelID: "gpt-5.5" },
     },
   });
@@ -22,7 +22,7 @@ test("turns /issue into an immediate native no-reply user message", () => {
   assert.equal(plan.upstreamPath, "/session/ses_parent_12345678/message?directory=%2Fhome%2Fopencode%2Fworkspace");
   assert.deepEqual(plan.promptBody, {
     messageID: "msg_user_12345678",
-    agent: "chat",
+    agent: "build",
     model: { providerID: "void", modelID: "gpt-5.5" },
     noReply: true,
     parts: [{ type: "text", text: "/issue поменяй фон на чёрный" }],

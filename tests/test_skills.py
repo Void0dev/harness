@@ -435,7 +435,7 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertIn("приватный `opencode-runtime`", addon)
 
 
-    def test_skill_assigns_publication_to_the_coding_agent_and_merge_to_a_release_agent(self):
+    def test_skill_assigns_github_operations_to_standard_opencode_agents(self):
         addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
         contract = (
             ROOT / "skills/deploy-opencode-harness/references/agent-contract.md"
@@ -445,7 +445,8 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertIn("coding agent", combined)
         for action in ("commit", "push", "draft PR"):
             self.assertIn(action, combined)
-        self.assertIn("release agent", combined)
+        self.assertIn("standard OpenCode", combined)
+        self.assertNotIn("release agent", combined)
         self.assertIn("`gh`", combined)
         for command in ("/merge stage", "/merge stage #<issue>", "/merge prod"):
             self.assertIn(command, combined)

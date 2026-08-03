@@ -52,7 +52,11 @@ test("reads the model gateway key from the configured secret file", async (t) =>
   });
   assert.deepEqual(config.provider["void-image"].models, { "model-image": { name: "model-image" } });
   assert.deepEqual(config.provider["void-video"].models, { "model-video": { name: "model-video" } });
-  assert.equal(config.agent.release.mode, "primary");
-  assert.equal(config.agent.release.permission.bash, "allow");
-  assert.equal(config.agent.release.permission.edit, "deny");
+  assert.equal(config.default_agent, "build");
+  assert.equal(config.agent.build.mode, "primary");
+  assert.equal(config.agent.build.permission["*"], "allow");
+  assert.equal(config.agent.build.permission.external_directory, "deny");
+  assert.equal(config.agent.chat, undefined);
+  assert.equal(config.agent.release, undefined);
+  assert.equal(config.agent["harness-worker"], undefined);
 });

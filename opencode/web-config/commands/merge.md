@@ -1,6 +1,6 @@
 ---
 description: Explicitly merge a completed Harness pull request into stage or promote stage to production
-agent: release
+agent: build
 ---
 
 Execute exactly one explicit release operation from `$ARGUMENTS`.

@@ -24,14 +24,15 @@ ai:backlog -> ai:todo -> ai:running -> ai:finished
 
 Both services receive the same repository-scoped GitHub App ID, Installation ID, owner, repository, base branch, and read-only PEM mount. The public Harness additionally receives login credentials and a 32+ character session-signing secret. The private `opencode-runtime` receives `VOID_AI_BASE_URL`, `VOID_AI_API_KEY`, `VOID_AI_MODEL_ID`, and the OpenCode SQLite volume. Harness must never receive the model API key; the runtime must never receive web credentials or the session-signing secret.
 
-## OpenCode sessions and context
+## OpenCode sessions and project workspace
 
 - Persist the private runtime's `/home/opencode/.local/share` as the standard OpenCode data directory containing SQLite.
-- Persist `$HARNESS_DATA_DIR/context` as a periodically refreshed checkout of existing `stage`, mounted read-only into the parent chat.
+- Persist `$HARNESS_DATA_DIR/context` as the writable project workspace mounted into standard OpenCode. Clone existing `stage` on first start; later startup may fast-forward only a clean local `stage` and must preserve every other branch or working-tree change.
 - Persist `$HARNESS_DATA_DIR/runs` and mount the same absolute path into Harness and `opencode-runtime`.
 - `/issue` stores `<!-- opencode-harness-parent: ses_... -->` in the GitHub Issue.
 - A chat-created Issue uses that visible parent; an `ai:todo` Issue created directly in GitHub receives a standalone visible parent.
-- Each Issue receives one child session and one isolated writable checkout. The parent context is never edited.
+- Standard OpenCode uses the `build` agent with edit, bash, commit, push, PR, and GitHub operations available inside the project workspace.
+- Each Issue receives one child session using the same standard OpenCode agent in a separate isolated writable checkout.
 - A real `<human-attention>` question accepts the next ordinary parent reply. A technical failure is retried only through `/retry`.
 
 ## Trust boundaries
@@ -39,13 +40,14 @@ Both services receive the same repository-scoped GitHub App ID, Installation ID,
 - No Sandcastle, model broker, Docker socket, or separate coding container is part of this architecture.
 - The public `harness` is the authenticated web gateway and Issue worker.
 - The private `opencode-runtime` has no public route and accepts only the internal bearer supplied by Harness.
-- The GitHub App PEM and repository coordinates are available to both services so coding and release agents can authenticate GitHub CLI operations.
+- The GitHub App PEM and repository coordinates are available to both services so the standard OpenCode agent can authenticate GitHub CLI operations.
 - The Void gateway key enters only `opencode-runtime`.
 - The browser never receives `HARNESS_COMMAND_TOKEN` or `OPENCODE_INTERNAL_TOKEN`.
 - OpenCode plugins reach privileged Harness commands through a loopback-only web proxy; the proxy adds the real command token server-side.
 - Target Coolify credentials never enter Harness coding sessions.
 - The coding agent works in the isolated checkout, creates its own commit, pushes `opencode/issue-*` with `harness-github git`, and creates or reuses a draft PR into `stage` with `harness-github gh`.
-- Normal Issue processing always stops at that draft PR. Authenticated `/merge stage`, `/merge stage #<issue>`, or `/merge prod` starts a separate ordinary release agent, which reads current GitHub state and performs the requested operation with `gh`. Production is always a `stage -> main` pull request.
+- Normal Issue processing always stops at that draft PR. Authenticated `/merge stage`, `/merge stage #<issue>`, or `/merge prod` runs as an ordinary command prompt in the same standard OpenCode `build` agent, which reads current GitHub state and performs the requested operation with `gh`. Production is always a `stage -> main` pull request.
+- Agent configuration does not prevent GitHub operations. Release App permissions and GitHub rulesets are the authority for allowed push and merge actions.
 
 ## Operational endpoints
 
@@ -57,11 +59,11 @@ Both services receive the same repository-scoped GitHub App ID, Installation ID,
 - `POST /commands/issues`: create an Issue for `/issue`.
 - `POST /commands/answers`: accept a reply only for a real model question.
 - `POST /commands/retries`: explicitly retry a recoverable technical failure.
-- `/merge` is handled as an ordinary release-agent task. Harness owns no merge endpoint, merge service, or operation ledger; the release agent uses current GitHub state and standard `gh` commands.
+- `/merge` is handled as an ordinary standard OpenCode command. Harness owns no merge endpoint, merge service, operation ledger, or privileged merge role; the `build` agent uses current GitHub state and standard `gh` commands.
 - `GET /ui/tasks`: return the sanitized durable task projection for one parent session.
 
 Online verification must use one fixed HTTPS origin, reject redirects and credentials in URLs, and cap response size.
 
 ## Completion
 
-The verified default flow is Issue → visible parent → OpenCode child session → isolated checkout → coding agent commit → push of `opencode/issue-*` → draft PR against `stage`, with no automatic merge. The explicit release flows run in a separate release agent through `gh`: feature PR → `stage` and `stage` → `main`.
+The verified default flow is Issue → visible parent → OpenCode child session → isolated checkout → coding agent commit → push of `opencode/issue-*` → draft PR against `stage`, with no automatic merge. Explicit release flows are ordinary standard OpenCode commands through `gh`: feature PR → `stage` and `stage` → `main`.

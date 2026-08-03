@@ -1,4 +1,4 @@
 interface:
   display_name: "Deploy OpenCode Harness"
   short_description: "Install or resume one isolated repository Harness"
-  default_prompt: "Use $deploy-opencode-harness to discover available server access, guide the repository owner through the repository-scoped Release App checkpoint, install one public Harness plus one private OpenCode Runtime with shared Release App credentials, verify coding-agent draft PR publication and release-agent gh merge handling, and return exactly url, login, and password."
+  default_prompt: "Use $deploy-opencode-harness to discover available server access, guide the repository owner through the repository-scoped Release App checkpoint, install one public Harness plus one private OpenCode Runtime with a writable project workspace and shared Release App credentials, verify coding-agent draft PR publication and standard OpenCode gh merge handling, and return exactly url, login, and password."

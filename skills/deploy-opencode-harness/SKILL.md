@@ -15,10 +15,12 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 - `harness` содержит authenticated web gateway и Issue worker.
 - `opencode-runtime` содержит OpenCode server, SQLite, model execution и model gateway key. Он не получает web password или session-signing secret.
 - Repository-scoped GitHub App App ID, Installation ID, owner, repository, base branch и read-only PEM доступны и `harness`, и `opencode-runtime`.
+- Standard OpenCode `build` agent получает writable checkout project repository, полный доступ к инструментам внутри workspace и GitHub authentication через `harness-github`.
 - Coding agent сам создаёт commit, push'ит `opencode/issue-*` и создаёт или переиспользует draft PR в `stage` через `harness-github git` и `harness-github gh`.
 - Обычный Issue flow всегда заканчивается draft PR в `stage`. Никакой текст модели, label, успешная проверка или таймер не запускает merge автоматически.
-- `/merge stage`, `/merge stage #<issue>` и `/merge prod` запускают отдельный обычный release agent. Release agent проверяет GitHub state и выполняет требуемые операции стандартными командами `gh`; Harness только запускает эту agent task.
+- `/merge stage`, `/merge stage #<issue>` и `/merge prod` — command prompts для того же standard OpenCode `build` agent. Harness не создаёт отдельную release role и не выполняет merge in-process.
 - `/merge prod` всегда создаёт или переиспользует PR `stage -> main`; feature branch никогда не мержится прямо в `main`.
+- Возможность push или merge определяется только Release App permissions и GitHub rulesets; OpenCode agent permissions не являются security boundary.
 
 ## Phase 1: discover access
 
@@ -81,8 +83,9 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 - `/live`, `/ready`, `/health/worker` и token-protected `/identity` соответствуют ожидаемому repository;
 - Release App видит только target repository и имеет точный permission floor без Administration;
 - `main`, `stage`, `harness-stage` и `harness-production` verified read-back совпадают с desired state;
+- standard OpenCode agent открывается в persistent writable checkout target repository и имеет edit/bash/GitHub tools;
 - coding agent создаёт commit, push и draft PR в `stage` самостоятельно;
-- `/merge` выполняется отдельным release agent через `gh`; Harness не выполняет merge in-process;
+- `/merge` выполняется standard OpenCode `build` agent через `gh`; Harness не выполняет merge in-process;
 - runtime не получает web credentials; Harness не получает model key;
 - deployed images immutable и проходят `references/image-release.md` verification.
 
@@ -99,7 +102,7 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 
 - Одинаковые inputs reconcile the same Harness; uncertain response не является причиной создать второй.
 - Branch creation, ruleset apply, secret generation и service creation выполняются at most once per desired-state digest.
-- Repeated `/merge` requests require the release agent to re-read current GitHub state with `gh` and treat an already completed operation as a no-op.
+- Repeated `/merge` requests require the standard OpenCode agent to re-read current GitHub state with `gh` and treat an already completed operation as a no-op.
 - Never call DELETE. Repair compatible drift or stop on incompatible ownership.
 
 ## Security invariants
@@ -107,7 +110,7 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 - Never print, log, commit, persist or echo PEM, server credentials, bootstrap authority, installation token, model key, internal tokens or secret-bearing API bodies.
 - Repository-scoped GitHub App credentials доступны обоим сервисам; web authority остаётся только в `harness`, а model key и OpenCode database — только в `opencode-runtime`.
 - Harness и runtime используют distinct UID/PID namespaces; общий GID разрешён только для setgid `context` и `runs`.
-- `context` runtime-read-only; private Harness state остаётся `0700`; no Docker socket or privileged mode.
+- Project workspace доступен runtime на запись; Harness никогда не reset/clean local branch или uncommitted changes. Private Harness state остаётся `0700`; no Docker socket or privileged mode.
 - Final output contains no verification evidence, App metadata or infrastructure credentials.
 
 ## Result contract

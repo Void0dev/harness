@@ -114,7 +114,6 @@ export const config = {
   webSessionSecret: strongSecret("OPENCODE_SESSION_SECRET"),
   webSessionTtlSeconds: boundedSessionTtl(),
   contextDir: path.join(dataDir, "context"),
-  contextRefreshMs: numberEnv("CONTEXT_REFRESH_SECONDS", 60) * 1000,
   workspaceRetentionMs: workspaceRetentionHours * 60 * 60 * 1000,
   dataDir,
 };

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAnswerHooks } from "../lib/answer-plugin.mjs";
 
-test("starts the bounded Harness context refresh without delaying user-message persistence", async () => {
+test("starts bounded Harness answer forwarding without delaying user-message persistence", async () => {
   let release;
   const barrier = new Promise((resolve) => { release = resolve; });
   const hooks = createAnswerHooks({

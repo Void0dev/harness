@@ -13,7 +13,6 @@ services:
       GITHUB_BASE_BRANCH: ${GITHUB_BASE_BRANCH:-stage}
       HARNESS_COMMAND_TOKEN: ${HARNESS_COMMAND_TOKEN:?set a 32+ character command token}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-10}
-      CONTEXT_REFRESH_SECONDS: ${CONTEXT_REFRESH_SECONDS:-5}
       WORKSPACE_RETENTION_HOURS: ${WORKSPACE_RETENTION_HOURS:-24}
       MAX_CONCURRENT_RUNS: 1
       HEALTH_PORT: 3000
@@ -70,7 +69,7 @@ services:
         target: /run/secrets/void-ai-api-key
     volumes:
       - ./.local-harness/opencode:/home/opencode/.local/share/opencode
-      - ./.local-harness/context:/home/opencode/workspace:ro
+      - ./.local-harness/context:/home/opencode/workspace
       - ./.local-harness/runs:/opt/issue-harness/local-test/runs
       - ./github-app-private-key.pem:/run/secrets/github-app.pem:ro
     expose:

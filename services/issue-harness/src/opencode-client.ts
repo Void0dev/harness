@@ -98,7 +98,7 @@ export class OpenCodeClient {
       `/session/${options.sessionId}/prompt_async`,
       options.directory,
       {
-        agent: "harness-worker",
+        agent: "build",
         model: { providerID: "void", modelID: this.options.modelId },
         parts: [{ type: "text", text: options.prompt }],
       },

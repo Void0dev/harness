@@ -5,11 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { refreshContextCheckout, withFreshContext } from "../src/context.js";
+import { prepareProjectWorkspace } from "../src/context.js";
 
 const execFileAsync = promisify(execFile);
 
-test("clones and refreshes one read-only context checkout from stage", async (t) => {
+test("clones and fast-forwards one writable project workspace on stage", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-context-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const source = path.join(root, "source");
@@ -28,7 +28,7 @@ test("clones and refreshes one read-only context checkout from stage", async (t)
   await git(source, "remote", "add", "origin", remote);
   await git(source, "push", "-u", "origin", "stage");
 
-  const first = await refreshContextCheckout({
+  const first = await prepareProjectWorkspace({
     contextDir,
     remoteUrl: remote,
     baseBranch: "stage",
@@ -41,25 +41,70 @@ test("clones and refreshes one read-only context checkout from stage", async (t)
   await git(source, "commit", "-m", "update");
   await git(source, "push", "origin", "stage");
 
-  const second = await refreshContextCheckout({
+  const second = await prepareProjectWorkspace({
     contextDir,
     remoteUrl: remote,
     baseBranch: "stage",
   });
   assert.equal(await fs.readFile(path.join(contextDir, "version.txt"), "utf8"), "two\n");
   assert.notEqual(second.revision, first.revision);
-  assert.equal((await git(contextDir, "branch", "--show-current")).trim(), "");
+  assert.equal((await git(contextDir, "branch", "--show-current")).trim(), "stage");
 });
 
-test("refreshes stage before an ordinary parent-chat message is released to OpenCode", async () => {
-  const events: string[] = [];
-  const handle = withFreshContext(
-    async () => { events.push("refresh-stage"); },
-    async (text: string) => { events.push(`answer:${text}`); return "ok"; },
-  );
+test("preserves local project workspace changes instead of resetting them", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-project-workspace-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const source = path.join(root, "source");
+  const remote = path.join(root, "remote.git");
+  const contextDir = path.join(root, "context");
 
-  assert.equal(await handle("current background"), "ok");
-  assert.deepEqual(events, ["refresh-stage", "answer:current background"]);
+  await git(root, "init", "--bare", remote);
+  await fs.mkdir(source);
+  await git(source, "init", "-b", "stage");
+  await git(source, "config", "user.name", "Test");
+  await git(source, "config", "user.email", "test@example.test");
+  await fs.writeFile(path.join(source, "version.txt"), "one\n");
+  await git(source, "add", "version.txt");
+  await git(source, "commit", "-m", "initial");
+  await git(source, "remote", "add", "origin", remote);
+  await git(source, "push", "-u", "origin", "stage");
+
+  await prepareProjectWorkspace({ contextDir, remoteUrl: remote, baseBranch: "stage" });
+  await fs.writeFile(path.join(contextDir, "version.txt"), "local work\n");
+  await fs.writeFile(path.join(contextDir, "new.txt"), "untracked\n");
+
+  const refreshed = await prepareProjectWorkspace({ contextDir, remoteUrl: remote, baseBranch: "stage" });
+
+  assert.equal(await fs.readFile(path.join(contextDir, "version.txt"), "utf8"), "local work\n");
+  assert.equal(await fs.readFile(path.join(contextDir, "new.txt"), "utf8"), "untracked\n");
+  assert.equal(refreshed.updated, false);
+});
+
+test("migrates the legacy clean detached stage checkout to a writable stage branch", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-legacy-context-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const source = path.join(root, "source");
+  const remote = path.join(root, "remote.git");
+  const contextDir = path.join(root, "context");
+
+  await git(root, "init", "--bare", remote);
+  await fs.mkdir(source);
+  await git(source, "init", "-b", "stage");
+  await git(source, "config", "user.name", "Test");
+  await git(source, "config", "user.email", "test@example.test");
+  await fs.writeFile(path.join(source, "version.txt"), "one\n");
+  await git(source, "add", "version.txt");
+  await git(source, "commit", "-m", "initial");
+  await git(source, "remote", "add", "origin", remote);
+  await git(source, "push", "-u", "origin", "stage");
+
+  await prepareProjectWorkspace({ contextDir, remoteUrl: remote, baseBranch: "stage" });
+  await git(contextDir, "checkout", "--detach", "origin/stage");
+
+  await prepareProjectWorkspace({ contextDir, remoteUrl: remote, baseBranch: "stage" });
+
+  assert.equal((await git(contextDir, "branch", "--show-current")).trim(), "stage");
+  assert.equal((await git(contextDir, "status", "--porcelain=v1")).trim(), "");
 });
 
 async function git(cwd: string, ...args: string[]) {

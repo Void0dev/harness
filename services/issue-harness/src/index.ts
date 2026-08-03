@@ -23,7 +23,7 @@ import {
 } from "./security.js";
 import { RunScheduler } from "./scheduler.js";
 import { parseIssueModelId, parseParentSessionId } from "./opencode.js";
-import { refreshContextCheckout, withFreshContext } from "./context.js";
+import { prepareProjectWorkspace as prepareWorkspaceCheckout } from "./context.js";
 import { OpenCodeClient } from "./opencode-client.js";
 import { retryTransient } from "./retry.js";
 import { cleanupExpiredWorkspaces } from "./retention.js";
@@ -61,7 +61,6 @@ let lastSuccessfulPollAt: number | null = null;
 let lastWorkerHeartbeatAt: number | null = null;
 let pollState: "waiting" | "polling" = "waiting";
 let runState: "idle" | "running" = "idle";
-let contextRefresh: Promise<void> | undefined;
 let workspaceCleanupInProgress = false;
 const recoveredGenerationMetadata = new Map<string, Awaited<ReturnType<OpenCodeClient["sessionGenerationMetadata"]>>>();
 
@@ -96,19 +95,14 @@ async function currentGitAuthEnvironment() {
   return githubGitAuthEnv(await getGitHubToken());
 }
 
-async function refreshContext() {
-  if (contextRefresh) return contextRefresh;
-  contextRefresh = currentGitAuthEnvironment().then((gitEnv) => refreshContextCheckout({
+async function prepareProjectWorkspace() {
+  const { revision, updated } = await prepareWorkspaceCheckout({
     contextDir: config.contextDir,
     remoteUrl,
     baseBranch: config.baseBranch,
-    gitEnv,
-  })).then(({ revision }) => {
-    console.log(`OpenCode read-only context refreshed at ${revision}`);
-  }).finally(() => {
-    contextRefresh = undefined;
+    gitEnv: await currentGitAuthEnvironment(),
   });
-  return contextRefresh;
+  console.log(`OpenCode project workspace ready at ${revision}${updated ? " (fast-forwarded)" : ""}`);
 }
 
 async function tick() {
@@ -639,7 +633,7 @@ async function main() {
   await tracker.ensureLabels();
   await reconcilePersistedStates();
   await cleanupWorkspaceStorage();
-  await refreshContext();
+  await prepareProjectWorkspace();
   await startHealthServer({
     port: config.healthPort,
     repository: `${config.owner}/${config.repo}`,
@@ -682,10 +676,10 @@ async function main() {
       return created;
     },
     getTaskViews: projectedTaskViews,
-    submitHumanAnswer: withFreshContext(refreshContext, async ({ text, parentSessionId }) => {
+    submitHumanAnswer: async ({ text, parentSessionId }) => {
       const current = state.getByParentSession(parentSessionId);
       return current ? await queueHumanReply(current, text) : null;
-    }),
+    },
     submitRetry: async ({ parentSessionId, instruction }) => {
       const current = state.getByParentSession(parentSessionId);
       if (!current || !acceptsTechnicalRetry(current)) return null;
@@ -718,9 +712,6 @@ async function main() {
   setInterval(() => { lastWorkerHeartbeatAt = Date.now(); }, heartbeatIntervalMs).unref();
   const poll = () => { tick().catch((error) => console.error(error)); };
   setInterval(poll, config.pollIntervalMs);
-  setInterval(() => {
-    refreshContext().catch((error) => console.error("Context refresh failed", error));
-  }, config.contextRefreshMs).unref();
   setInterval(() => {
     cleanupWorkspaceStorage({ onlyWhenIdle: true }).catch((error) => console.error("Workspace cleanup failed", error));
   }, 60 * 60 * 1000).unref();

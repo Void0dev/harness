@@ -106,3 +106,28 @@ test("rejects zero GitHub App identifiers", async () => {
     fetchImpl: async () => { throw new Error("must not fetch"); },
   }), /positive decimal integer/);
 });
+
+test("times out a stalled GitHub installation token request", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "github-app-token-timeout-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const keyPath = path.join(root, "github-app.pem");
+  await fs.writeFile(keyPath, privateKey.export({ type: "pkcs8", format: "pem" }));
+
+  const request = githubAppInstallationToken({
+    env: {
+      GITHUB_APP_ID: "12345",
+      GITHUB_APP_INSTALLATION_ID: "67890",
+      GITHUB_APP_PRIVATE_KEY_PATH: keyPath,
+    },
+    timeoutMs: 5,
+    fetchImpl: async (_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+    }),
+  });
+
+  await assert.rejects(Promise.race([
+    request,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("test timed out waiting for request abort")), 50)),
+  ]), /GitHub installation token request timed out/);
+});
