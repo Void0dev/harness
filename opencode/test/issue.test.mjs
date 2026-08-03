@@ -21,7 +21,7 @@ test("rejects an empty /issue command", async () => {
   );
 });
 
-test("creates an Issue through Harness without receiving GitHub credentials", async () => {
+test("creates an Issue through Harness instead of calling GitHub directly", async () => {
   let observed;
   const result = await createIssueFromCommand({
     argumentsText: "Add a health endpoint",

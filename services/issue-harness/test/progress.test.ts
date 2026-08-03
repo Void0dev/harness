@@ -22,10 +22,9 @@ test("turns a worker final response into a bounded clean summary", () => {
   );
 });
 
-test("builds file statistics only for trusted artifact paths", () => {
+test("builds file statistics for safe changed paths", () => {
   assert.deepEqual(parseChangedFileStats(
     "12\t3\tsrc/login.ts\n-\t-\tassets/logo.png\n99\t0\t../secret\n",
-    ["assets/logo.png", "src/login.ts"],
   ), [
     { path: "assets/logo.png" },
     { path: "src/login.ts", additions: 12, deletions: 3 },

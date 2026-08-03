@@ -150,12 +150,12 @@ test("accepts an explicit retry only for a recoverable technical failure", () =>
   assert.equal(acceptsTechnicalRetry({ status: "running", awaitingAction: "rerun", taskView: failed }), false);
 });
 
-test("plain retry preserves the failed operation while a correction resumes the child session", () => {
+test("technical retry resumes the child session when one is available", () => {
   const failed = {
     issueNumber: 8,
     branch: "opencode/issue-8-network-failure",
     status: "awaiting_human" as const,
-    awaitingAction: "retry_publish" as const,
+    awaitingAction: "resume_child" as const,
     lastSessionId: "ses_worker_12345678",
     workspace: "C:\\runs\\issue-8",
     baseSha: "a".repeat(40),

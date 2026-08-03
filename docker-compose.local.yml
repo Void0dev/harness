@@ -52,6 +52,12 @@ services:
     environment:
       OPENCODE_RUNTIME_MODE: private
       OPENCODE_INTERNAL_TOKEN: ${OPENCODE_INTERNAL_TOKEN:?set a 32+ character internal token}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?set the GitHub App ID}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?set the GitHub App installation ID}
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+      GITHUB_OWNER: ${GITHUB_OWNER:?set the repository owner}
+      GITHUB_REPO: ${GITHUB_REPO:?set the repository name}
+      GITHUB_BASE_BRANCH: ${GITHUB_BASE_BRANCH:-stage}
       VOID_AI_BASE_URL: ${VOID_AI_BASE_URL:-https://ai-gateway.void0.org/v1}
       VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key
       OPENCODE_PROJECT_DIR: /home/opencode/workspace
@@ -66,6 +72,7 @@ services:
       - ./.local-harness/opencode:/home/opencode/.local/share/opencode
       - ./.local-harness/context:/home/opencode/workspace:ro
       - ./.local-harness/runs:/opt/issue-harness/local-test/runs
+      - ./github-app-private-key.pem:/run/secrets/github-app.pem:ro
     expose:
       - "4096"
     init: true

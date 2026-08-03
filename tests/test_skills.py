@@ -323,7 +323,7 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertNotIn("COOLIFY_TOKEN", skill)
         for capability in (
             "bounded command execution",
-            "deployment artifact materialization",
+            "deployment definition materialization",
             "persistent storage",
             "secret storage/rotation",
             "one public HTTPS route",
@@ -334,7 +334,7 @@ class SkillScriptsTest(unittest.TestCase):
 
     def test_skill_uses_one_time_secret_reads_and_never_requests_pem_contents(self):
         addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("прочитай App ID/PEM один раз", addon)
+        self.assertIn("прочитай App ID, Installation ID, owner, repository, base branch и PEM один раз", addon)
         self.assertIn("Никогда не проси вставлять PEM contents", addon)
         self.assertIn("GITHUB_APP_INSTALLATION_ID", addon)
         self.assertIn("github_app_verifier.py", addon)
@@ -435,44 +435,51 @@ class SkillScriptsTest(unittest.TestCase):
         self.assertIn("приватный `opencode-runtime`", addon)
 
 
-    def test_skill_defines_draft_pr_default_and_explicit_merge_lanes(self):
+    def test_skill_assigns_publication_to_the_coding_agent_and_merge_to_a_release_agent(self):
         addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("draft PR", addon)
-        self.assertIn("не запускает merge автоматически", addon)
+        contract = (
+            ROOT / "skills/deploy-opencode-harness/references/agent-contract.md"
+        ).read_text(encoding="utf-8")
+        combined = addon + "\n" + contract
+
+        self.assertIn("coding agent", combined)
+        for action in ("commit", "push", "draft PR"):
+            self.assertIn(action, combined)
+        self.assertIn("release agent", combined)
+        self.assertIn("`gh`", combined)
         for command in ("/merge stage", "/merge stage #<issue>", "/merge prod"):
-            self.assertIn(command, addon)
-        self.assertIn("PR `stage -> main`", addon)
-        self.assertIn("никогда не мержится прямо в `main`", addon)
-
-
-    def test_harness_runtime_uses_only_github_app_credentials(self):
-        runtime_files = [
-            ROOT / ".env.example",
-            ROOT / "docker-compose.local.yml",
-            ROOT / "coolify/docker-compose.yml",
-            ROOT / "skills/deploy-opencode-harness/assets/harness-compose.yml",
-            ROOT / "skills/deploy-opencode-harness/references/agent-contract.md",
-            ROOT / "skills/deploy-opencode-harness/SKILL.md",
-        ]
-        for path in runtime_files:
-            content = path.read_text()
-            self.assertNotIn("GITHUB_TOKEN", content, str(path))
-            self.assertIn("GITHUB_APP_ID", content, str(path))
-            self.assertIn("GITHUB_APP_INSTALLATION_ID", content, str(path))
-
-        addon = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
-        self.assertIn("App ID", addon)
-        self.assertIn("GITHUB_APP_INSTALLATION_ID", addon)
-
-        for relative in (
-            "docker-compose.local.yml",
-            "coolify/docker-compose.yml",
-            "skills/deploy-opencode-harness/assets/harness-compose.yml",
+            self.assertIn(command, combined)
+        for stale in (
+            "trusted publisher",
+            "content-addressed artifact",
+            "explicit merge authority",
+            "explicit merge orchestration",
+            "persisted operation keys",
         ):
-            compose = (ROOT / relative).read_text()
-            self.assertIn("GITHUB_APP_PRIVATE_KEY_PATH", compose)
-            self.assertIn("HARNESS_COMMAND_TOKEN", compose)
-            self.assertRegex(compose, r"github-app[^\n]*:ro")
+            self.assertNotIn(stale, combined)
+
+
+    def test_skill_compose_shares_repository_scoped_github_app_context_with_both_services(self):
+        compose = (
+            ROOT / "skills/deploy-opencode-harness/assets/harness-compose.yml"
+        ).read_text()
+        harness = compose.split("  harness:", 1)[1].split("  opencode-runtime:", 1)[0]
+        runtime = compose.split("  opencode-runtime:", 1)[1].split("\nconfigs:", 1)[0]
+
+        for marker in (
+            "GITHUB_APP_ID",
+            "GITHUB_APP_INSTALLATION_ID",
+            "GITHUB_APP_PRIVATE_KEY_PATH",
+            "GITHUB_OWNER",
+            "GITHUB_REPO",
+            "GITHUB_BASE_BRANCH",
+        ):
+            self.assertIn(marker, harness)
+            self.assertIn(marker, runtime)
+        self.assertNotIn("GITHUB_TOKEN", compose)
+        mount = r"GITHUB_APP_PRIVATE_KEY_HOST_PATH[^\n]*:/run/secrets/github-app\.pem:ro"
+        self.assertRegex(harness, mount)
+        self.assertRegex(runtime, mount)
 
 
     def fixture(self):

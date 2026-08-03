@@ -87,6 +87,17 @@ const agents = profile === "web"
           external_directory: "deny",
         },
       },
+      release: {
+        description: "GitHub release operator for explicit stage and production merge commands",
+        mode: "primary",
+        permission: {
+          "*": "allow",
+          edit: "deny",
+          bash: "allow",
+          task: "deny",
+          external_directory: "deny",
+        },
+      },
       "harness-worker": {
         description: "Child-session coding worker for a GitHub Issue",
         mode: "primary",

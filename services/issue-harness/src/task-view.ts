@@ -52,12 +52,12 @@ export function acceptsTechnicalRetry(run: {
 }) {
   return run.status === "awaiting_human"
     && run.taskView?.status === "failed"
-    && new Set(["resume_child", "retry_publish", "rerun"]).has(String(run.awaitingAction));
+    && new Set(["resume_child", "rerun"]).has(String(run.awaitingAction));
 }
 
 export function technicalRetryTransition<T extends {
   status?: unknown;
-  awaitingAction?: "resume_child" | "retry_publish" | "rerun";
+  awaitingAction?: "resume_child" | "rerun";
   lastSessionId?: string;
   workspace?: string;
   baseSha?: string;

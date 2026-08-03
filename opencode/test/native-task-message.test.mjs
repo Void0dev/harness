@@ -285,44 +285,6 @@ test("keeps an unknown Harness HTTP status visible in the Issue error", () => {
   }
 });
 
-test("materializes an explicit merge result without changing the exact command", () => {
-  const { db, dbPath, directory } = fixture();
-  try {
-    const parent = "ses_parent_12345678";
-    insertSession(db, parent, "Project chat", "/workspace");
-    insertMessage(db, {
-      id: "msg_merge_12345678", sessionId: parent, createdAt: 1_000,
-      data: { role: "user", time: { created: 1_000 }, model: { providerID: "void", modelID: "gpt-5.5" } },
-      parts: [{ type: "text", text: "/merge stage #42" }],
-    });
-
-    materializeCommandOutcome({
-      dbPath,
-      parentSessionId: parent,
-      messageID: "msg_merge_12345678",
-      commandText: "/merge stage #42",
-      outcome: {
-        command: "merge",
-        status: "merged",
-        target: "stage",
-        pullRequestNumber: 81,
-        mergeSha: "a".repeat(40),
-      },
-      projectDirectory: "/workspace",
-      updatedAt: 2_000,
-    });
-
-    const userText = JSON.parse(db.prepare("SELECT data FROM part WHERE message_id = ?").get("msg_merge_12345678").data).text;
-    assert.equal(userText, "/merge stage #42");
-    const reply = db.prepare("SELECT p.data FROM message m JOIN part p ON p.message_id = m.id WHERE m.id LIKE ?")
-      .get("msg_merge_12345678_harness_command_%");
-    assert.match(JSON.parse(reply.data).text, /PR #81 успешно смержен в stage/);
-  } finally {
-    db.close();
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 test("recovers a standalone retry acknowledgement as the latest retry command", () => {
   const { db, dbPath, directory } = fixture();
   try {

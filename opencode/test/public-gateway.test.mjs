@@ -84,7 +84,7 @@ test("public gateway rejects upstream URLs with embedded credentials", async () 
   }), /plain HTTP/);
 });
 
-test("public gateway proxies authenticated non-merge commands without requiring an Origin header", async (t) => {
+test("public gateway transparently proxies authenticated command requests", async (t) => {
   const observed = [];
   const runtime = http.createServer(async (request, response) => {
     const chunks = [];
@@ -119,177 +119,13 @@ test("public gateway proxies authenticated non-merge commands without requiring 
   const response = await fetch(`${base}/session/ses_parent_12345678/command`, {
     method: "POST",
     headers: { cookie: login.headers.get("set-cookie"), "content-type": "application/json" },
-    body: JSON.stringify({ command: "issue", arguments: "Add a test" }),
+    body: JSON.stringify({ command: "merge", arguments: "stage #42" }),
   });
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { proxied: true });
   assert.deepEqual(observed, [{
     url: "/session/ses_parent_12345678/command",
-    body: JSON.stringify({ command: "issue", arguments: "Add a test" }),
-  }]);
-});
-
-test("public gateway dispatches merge only from an authenticated same-origin request", async (t) => {
-  const runtimeRequests = [];
-  const runtime = http.createServer(async (request, response) => {
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    runtimeRequests.push({ url: request.url, body: Buffer.concat(chunks).toString("utf8") });
-    if (request.url?.startsWith("/session/") && request.url.includes("/message")) {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end('{"info":{"id":"msg_user_12345678"}}');
-      return;
-    }
-    if (request.url === "/__runtime/control/merge-outcome") {
-      response.writeHead(204).end();
-      return;
-    }
-    response.writeHead(404).end();
-  });
-  const runtimePort = await listen(runtime);
-  t.after(() => runtime.close());
-  const merges = [];
-  const gateway = await startPublicGateway({
-    port: 0,
-    upstreamUrl: `http://127.0.0.1:${runtimePort}`,
-    username: "developer",
-    password: "correct-password-that-is-long-enough",
-    sessionSecret: "s".repeat(32),
-    internalToken: "i".repeat(32),
-    submitMerge: async (request) => {
-      merges.push(request);
-      return { status: "merged", target: "stage", pullRequestNumber: 81, mergeSha: "a".repeat(40) };
-    },
-  });
-  t.after(() => gateway.close());
-  const port = gateway.address().port;
-  const base = `http://127.0.0.1:${port}`;
-  const login = await fetch(`${base}/login`, {
-    method: "POST",
-    redirect: "manual",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      username: "developer",
-      password: "correct-password-that-is-long-enough",
-      next: "/",
-    }),
-  });
-  const cookie = login.headers.get("set-cookie");
-
-  const forbidden = await fetch(`${base}/session/ses_parent_12345678/command`, {
-    method: "POST",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ command: "merge", arguments: "stage", requestedBy: "attacker" }),
-  });
-  assert.equal(forbidden.status, 403);
-
-  const accepted = await fetch(`${base}/session/ses_parent_12345678/command`, {
-    method: "POST",
-    headers: { cookie, origin: base, "content-type": "application/json" },
-    body: JSON.stringify({ command: "merge", arguments: "stage #42", requestedBy: "attacker" }),
-  });
-  assert.equal(accepted.status, 200);
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.deepEqual(merges, [{
-    parentSessionId: "ses_parent_12345678",
-    argumentsText: "stage #42",
-    requestedBy: "developer",
-  }]);
-  assert.equal(runtimeRequests.length, 2);
-  assert.match(runtimeRequests[0].url, /\/session\/ses_parent_12345678\/message/);
-  const materialized = JSON.parse(runtimeRequests[1].body);
-  assert.equal(materialized.outcome.command, "merge");
-  assert.equal(materialized.outcome.status, "merged");
-});
-
-test("public gateway acknowledges merge only after dispatch and outcome materialization", async (t) => {
-  let releaseMerge;
-  const mergeGate = new Promise((resolve) => { releaseMerge = resolve; });
-  const runtime = http.createServer(async (request, response) => {
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    if (request.url?.startsWith("/session/") && request.url.includes("/message")) {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end('{"info":{"id":"msg_user_12345678"}}');
-      return;
-    }
-    if (request.url === "/__runtime/control/merge-outcome") {
-      response.writeHead(204).end();
-      return;
-    }
-    response.writeHead(404).end();
-  });
-  const runtimePort = await listen(runtime);
-  t.after(() => runtime.close());
-  const gateway = await startPublicGateway({
-    port: 0,
-    upstreamUrl: `http://127.0.0.1:${runtimePort}`,
-    username: "developer",
-    password: "correct-password-that-is-long-enough",
-    sessionSecret: "s".repeat(32),
-    internalToken: "i".repeat(32),
-    submitMerge: async () => {
-      await mergeGate;
-      return { status: "merged", target: "stage", pullRequestNumber: 81, mergeSha: "a".repeat(40) };
-    },
-  });
-  t.after(() => gateway.close());
-  const base = `http://127.0.0.1:${gateway.address().port}`;
-  const login = await fetch(`${base}/login`, {
-    method: "POST",
-    redirect: "manual",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ username: "developer", password: "correct-password-that-is-long-enough", next: "/" }),
-  });
-  let settled = false;
-  const pending = fetch(`${base}/session/ses_parent_12345678/command`, {
-    method: "POST",
-    headers: { cookie: login.headers.get("set-cookie"), origin: base, "content-type": "application/json" },
     body: JSON.stringify({ command: "merge", arguments: "stage #42" }),
-  }).then((response) => { settled = true; return response; });
-
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(settled, false);
-  releaseMerge();
-  assert.equal((await pending).status, 200);
-});
-
-test("public gateway fails the request when merge outcome materialization is rejected", async (t) => {
-  const runtime = http.createServer((request, response) => {
-    if (request.url?.startsWith("/session/") && request.url.includes("/message")) {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end('{"info":{"id":"msg_user_12345678"}}');
-      return;
-    }
-    response.writeHead(500, { "content-type": "application/json" });
-    response.end('{"error":"write-failed"}');
-  });
-  const runtimePort = await listen(runtime);
-  t.after(() => runtime.close());
-  const gateway = await startPublicGateway({
-    port: 0,
-    upstreamUrl: `http://127.0.0.1:${runtimePort}`,
-    username: "developer",
-    password: "correct-password-that-is-long-enough",
-    sessionSecret: "s".repeat(32),
-    internalToken: "i".repeat(32),
-    submitMerge: async () => ({ status: "merged", target: "stage", pullRequestNumber: 81, mergeSha: "a".repeat(40) }),
-  });
-  t.after(() => gateway.close());
-  const base = `http://127.0.0.1:${gateway.address().port}`;
-  const login = await fetch(`${base}/login`, {
-    method: "POST",
-    redirect: "manual",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ username: "developer", password: "correct-password-that-is-long-enough", next: "/" }),
-  });
-
-  const response = await fetch(`${base}/session/ses_parent_12345678/command`, {
-    method: "POST",
-    headers: { cookie: login.headers.get("set-cookie"), origin: base, "content-type": "application/json" },
-    body: JSON.stringify({ command: "merge", arguments: "stage #42" }),
-  });
-
-  assert.equal(response.status, 502);
+  }]);
 });

@@ -1,0 +1,64 @@
+import { sign } from "node:crypto";
+import fs from "node:fs/promises";
+
+function requiredInteger(env, name) {
+  const value = env[name];
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) {
+    throw new Error(`${name} must be a positive decimal integer`);
+  }
+  return value;
+}
+
+async function privateKey(env) {
+  if (env.GITHUB_APP_PRIVATE_KEY_PATH) {
+    try {
+      return await fs.readFile(env.GITHUB_APP_PRIVATE_KEY_PATH, "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT" || !env.GITHUB_APP_PRIVATE_KEY_BASE64_PATH) throw error;
+    }
+  }
+  if (env.GITHUB_APP_PRIVATE_KEY_BASE64_PATH) {
+    const encoded = (await fs.readFile(env.GITHUB_APP_PRIVATE_KEY_BASE64_PATH, "utf8")).trim();
+    if (!encoded) throw new Error("GITHUB_APP_PRIVATE_KEY_BASE64_PATH is empty");
+    return Buffer.from(encoded, "base64").toString("utf8");
+  }
+  throw new Error("GITHUB_APP_PRIVATE_KEY_PATH or GITHUB_APP_PRIVATE_KEY_BASE64_PATH is required");
+}
+
+function encodeJson(value) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+export async function githubAppInstallationToken({
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+  now = Date.now,
+} = {}) {
+  const appID = requiredInteger(env, "GITHUB_APP_ID");
+  const installationID = requiredInteger(env, "GITHUB_APP_INSTALLATION_ID");
+  const key = await privateKey(env);
+  const nowSeconds = Math.floor(now() / 1000);
+  const encodedHeader = encodeJson({ alg: "RS256", typ: "JWT" });
+  const encodedPayload = encodeJson({
+    iat: nowSeconds - 60,
+    exp: nowSeconds + 540,
+    iss: appID,
+  });
+  const unsigned = `${encodedHeader}.${encodedPayload}`;
+  const signature = sign("RSA-SHA256", Buffer.from(unsigned), key).toString("base64url");
+  const response = await fetchImpl(`https://api.github.com/app/installations/${installationID}/access_tokens`, {
+    method: "POST",
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${unsigned}.${signature}`,
+      "user-agent": "opencode-harness",
+      "x-github-api-version": "2022-11-28",
+    },
+  });
+  if (!response.ok) throw new Error(`GitHub installation token request failed with HTTP ${response.status}`);
+  const payload = await response.json();
+  if (typeof payload?.token !== "string" || !payload.token || /\s/.test(payload.token)) {
+    throw new Error("GitHub installation token response is invalid");
+  }
+  return payload.token;
+}

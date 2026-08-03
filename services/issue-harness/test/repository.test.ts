@@ -6,9 +6,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import {
+  branchHead,
   prepareIsolatedExecutionWorkspace,
   githubGitAuthEnv,
   githubRepositoryRemote,
+  worktreeIsClean,
 } from "../src/repository.js";
 
 const execFileAsync = promisify(execFile);
@@ -30,7 +32,7 @@ test("rejects GitHub repository path traversal segments", () => {
   assert.throws(() => githubRepositoryRemote("..", "service"), /Invalid owner/);
 });
 
-test("creates an execution clone with independent Git metadata and no remote", async (t) => {
+test("creates an execution clone with independent Git metadata and a credential-free origin", async (t) => {
   const fixture = await createRemoteFixture();
   t.after(() => fs.rm(fixture.root, { recursive: true, force: true }));
   const hostileTemplate = path.join(fixture.root, "hostile-template");
@@ -64,9 +66,13 @@ test("creates an execution clone with independent Git metadata and no remote", a
   const trustedObjectFiles = await objectFileIds(path.join(fixture.remote, "objects"));
   const executionObjectFiles = await objectFileIds(path.join(execution.workspace, ".git", "objects"));
   assert.deepEqual([...executionObjectFiles].filter((id) => trustedObjectFiles.has(id)), []);
-  assert.equal(await git(execution.workspace, "remote"), "");
+  assert.equal(await git(execution.workspace, "remote", "get-url", "origin"), fixture.remote);
   assert.equal(await git(execution.workspace, "config", "core.hooksPath"), "/dev/null");
   assert.match(execution.baseSha, /^[0-9a-f]{40}$/);
+  assert.equal(await branchHead(execution.workspace, "stage"), execution.baseSha);
+  assert.equal(await worktreeIsClean(execution.workspace), true);
+  await fs.writeFile(path.join(execution.workspace, "untracked.txt"), "pending\n");
+  assert.equal(await worktreeIsClean(execution.workspace), false);
   assert.equal((await fs.stat(runsRoot)).mode & 0o777, 0o700);
   assert.equal(await fs.readFile(path.join(execution.workspace, "version.txt"), "utf8"), "v1\n");
   await assert.rejects(fs.access(hookSentinel));

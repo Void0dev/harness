@@ -63,7 +63,6 @@ export async function prepareIsolatedExecutionWorkspace(
     options.remoteUrl,
     workspace,
   );
-  await isolatedGit(workspace, undefined, "remote", "remove", "origin");
   await isolatedGit(workspace, undefined, "config", "core.hooksPath", "/dev/null");
   await isolatedGit(workspace, undefined, "config", "user.name", "OpenCode Harness");
   await isolatedGit(workspace, undefined, "config", "user.email", "opencode-harness@users.noreply.github.com");
@@ -78,6 +77,19 @@ export async function branchHasCommits(
 ) {
   const count = await isolatedGit(workspace, undefined, "rev-list", "--count", `${baseRef}..${branch}`);
   return Number.parseInt(count, 10) > 0;
+}
+
+export async function branchHead(workspace: string, branch: string) {
+  if (!gitBranch.test(branch) || branch.includes("..") || branch.includes("//") || branch.endsWith("/")) {
+    throw new Error(`Invalid execution branch: ${branch}`);
+  }
+  const head = await isolatedGit(workspace, undefined, "rev-parse", branch);
+  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(head)) throw new Error("Invalid branch HEAD");
+  return head;
+}
+
+export async function worktreeIsClean(workspace: string) {
+  return (await isolatedGit(workspace, undefined, "status", "--porcelain=v1", "--untracked-files=all")) === "";
 }
 
 export async function createExecutionBranch(workspace: string, branch: string) {

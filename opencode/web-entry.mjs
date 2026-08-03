@@ -9,8 +9,6 @@ import { startHarnessProxyServer } from "./lib/harness-proxy-server.mjs";
 import { forwardHarnessProxy } from "./lib/harness-proxy.mjs";
 import { projectSessionMetadata } from "./lib/session-metadata.mjs";
 import { runtimeRequestAuthorized } from "./lib/runtime-auth.mjs";
-import { isMergeCommandPayload } from "./lib/native-merge-command.mjs";
-import { parseMergeOutcomeRequest } from "./lib/runtime-control.mjs";
 import { materializeCommandOutcome, materializeTaskMessages } from "./lib/native-task-message.mjs";
 import { harnessCommandOutcome, nativeCommandPlan, persistThenDispatch } from "./lib/native-command.mjs";
 import {
@@ -243,11 +241,6 @@ async function proxyNativeHarnessCommand(request, response, url) {
   }
   let payload;
   try { payload = JSON.parse(body.toString("utf8")); } catch {}
-  if (runtimeMode && isMergeCommandPayload(payload)) {
-    response.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
-    response.end('{"error":"merge-not-available-in-runtime"}');
-    return;
-  }
   const plan = nativeCommandPlan({
     method: request.method,
     pathname: url.pathname,
@@ -471,27 +464,6 @@ async function proxySessionMetadata(requestUrl, response) {
   }
 }
 
-async function materializeMergeOutcome(request, response) {
-  let body;
-  try {
-    body = await readRequestBody(request, 256 * 1024);
-    const payload = parseMergeOutcomeRequest(JSON.parse(body.toString("utf8")));
-    materializeCommandOutcome({
-      dbPath: opencodeDatabasePath,
-      parentSessionId: payload.parentSessionId,
-      messageID: payload.messageID,
-      commandText: payload.commandText,
-      outcome: payload.outcome,
-      projectDirectory,
-    });
-    response.writeHead(204, { "cache-control": "no-store" });
-    response.end();
-  } catch {
-    response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
-    response.end('{"error":"invalid-merge-outcome"}');
-  }
-}
-
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://opencode.local");
   if (runtimeMode && !authorized(request)) {
@@ -555,10 +527,6 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === "GET" && url.pathname === "/__harness/api/session-metadata") {
     await proxySessionMetadata(url, response);
-    return;
-  }
-  if (runtimeMode && request.method === "POST" && url.pathname === "/__runtime/control/merge-outcome") {
-    await materializeMergeOutcome(request, response);
     return;
   }
   if (request.method === "POST" && /^\/session\/ses_[A-Za-z0-9_-]{8,128}\/command$/.test(url.pathname)) {

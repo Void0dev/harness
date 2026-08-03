@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  assertNoHighConfidenceSecrets,
   acquireProcessLock,
   ensureRuntimeIdentity,
   redactForGithub,
@@ -43,23 +42,6 @@ test("maps untrusted details to a bounded generic status", () => {
   });
   assert.equal(status.length < 512, true);
   assert.doesNotMatch(status, /raw attacker detail/i);
-});
-
-test("rejects exact and high-confidence credentials before publication", () => {
-  assert.throws(
-    () => assertNoHighConfidenceSecrets(
-      Buffer.from("+password=exact-deploy-secret\n"),
-      ["exact-deploy-secret"],
-    ),
-    /credential material/,
-  );
-  assert.throws(
-    () => assertNoHighConfidenceSecrets(
-      Buffer.from("+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJlX2J5dGVzX2hlcmU\n"),
-      [],
-    ),
-    /credential material/,
-  );
 });
 
 test("creates and repairs agent runtime directories with owner-only permissions", async (t) => {

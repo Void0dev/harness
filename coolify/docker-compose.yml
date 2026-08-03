@@ -48,6 +48,12 @@ services:
     environment:
       OPENCODE_RUNTIME_MODE: private
       OPENCODE_INTERNAL_TOKEN: ${OPENCODE_INTERNAL_TOKEN:?set internal token}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?set the GitHub App ID}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?set the installation ID}
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+      GITHUB_OWNER: ${GITHUB_OWNER:?set owner}
+      GITHUB_REPO: ${GITHUB_REPO:?set repository}
+      GITHUB_BASE_BRANCH: ${GITHUB_BASE_BRANCH:-stage}
       VOID_AI_BASE_URL: ${VOID_AI_BASE_URL:-https://ai-gateway.void0.org/v1}
       VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key
       OPENCODE_PROJECT_DIR: /home/opencode/workspace
@@ -62,6 +68,7 @@ services:
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/opencode:/home/opencode/.local/share/opencode
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/context:/home/opencode/workspace:ro
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/runs:${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/runs
+      - ${GITHUB_APP_PRIVATE_KEY_HOST_PATH:?set the GitHub App private key path}:/run/secrets/github-app.pem:ro
     init: true
     cpus: ${OPENCODE_CPU_LIMIT:-2}
     mem_limit: ${OPENCODE_MEMORY_LIMIT:-4g}

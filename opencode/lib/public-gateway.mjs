@@ -1,7 +1,5 @@
 import http from "node:http";
 import https from "node:https";
-import { fetchBounded } from "./bounded-fetch.mjs";
-import { nativeMergePlan, persistedMessageId } from "./native-merge-command.mjs";
 import {
   SESSION_COOKIE,
   cookieValue,
@@ -97,162 +95,6 @@ function proxyRequest(request, response, upstream, internalToken) {
   request.pipe(outbound);
 }
 
-function proxyBufferedRequest(request, response, body, upstream, internalToken) {
-  const transport = upstream.protocol === "https:" ? https : http;
-  const target = new URL(request.url ?? "/", upstream);
-  const headers = proxyHeaders(request.headers, upstream, internalToken);
-  headers["content-length"] = String(body.length);
-  const outbound = transport.request(target, { method: request.method, headers }, (upstreamResponse) => {
-    response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
-    upstreamResponse.pipe(response);
-  });
-  outbound.on("error", () => {
-    if (!response.headersSent) response.writeHead(502, { "content-type": "application/json", "cache-control": "no-store" });
-    response.end('{"error":"runtime-unavailable"}');
-  });
-  outbound.end(body);
-}
-
-async function readRequestBody(request, maximumBytes = 64 * 1024) {
-  const chunks = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    bytes += chunk.length;
-    if (bytes > maximumBytes) throw new Error("request body too large");
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
-function externalOrigin(request) {
-  const forwardedProtocol = String(request.headers["x-forwarded-proto"] ?? "").split(",")[0].trim();
-  const protocol = forwardedProtocol || (request.socket.encrypted ? "https" : "http");
-  const forwardedHost = String(request.headers["x-forwarded-host"] ?? "").split(",")[0].trim();
-  const host = forwardedHost || request.headers.host;
-  return host ? `${protocol}://${host}` : undefined;
-}
-
-function sameOrigin(request) {
-  const expected = externalOrigin(request);
-  const supplied = request.headers.origin;
-  if (!expected || typeof supplied !== "string") return false;
-  try {
-    return new URL(supplied).origin === new URL(expected).origin;
-  } catch {
-    return false;
-  }
-}
-
-async function materializeMergeOutcome({ upstream, internalToken, plan, messageID, outcome }) {
-  const response = await fetchBounded({
-    url: new URL("/__runtime/control/merge-outcome", upstream),
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${internalToken}`,
-      "Content-Type": "application/json",
-    },
-    body: Buffer.from(JSON.stringify({
-      parentSessionId: plan.sessionID,
-      messageID,
-      commandText: plan.commandText,
-      outcome: { ...outcome, command: "merge" },
-    })),
-    timeoutMs: 10_000,
-    maximumBytes: 256 * 1024,
-  });
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error("Runtime rejected merge outcome materialization");
-  }
-}
-
-function writeBufferedResponse(response, upstream) {
-  response.writeHead(upstream.status, {
-    "content-type": upstream.contentType || "application/json; charset=utf-8",
-    "content-length": String(upstream.body.length),
-    "cache-control": "no-store",
-    "x-content-type-options": "nosniff",
-  });
-  response.end(upstream.body);
-}
-
-async function handleMergeCommand({
-  request,
-  response,
-  url,
-  upstream,
-  internalToken,
-  requestedBy,
-  submitMerge,
-}) {
-  let body;
-  try {
-    body = await readRequestBody(request);
-  } catch {
-    response.writeHead(413, { "content-type": "application/json", "cache-control": "no-store" });
-    response.end('{"error":"request-too-large"}');
-    return true;
-  }
-  let payload;
-  try { payload = JSON.parse(body.toString("utf8")); } catch {}
-  const plan = nativeMergePlan({
-    method: request.method,
-    pathname: url.pathname,
-    search: url.search,
-    body: payload,
-  });
-  if (!plan) {
-    proxyBufferedRequest(request, response, body, upstream, internalToken);
-    return true;
-  }
-  if (!sameOrigin(request)) {
-    response.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
-    response.end('{"error":"same-origin-required"}');
-    return true;
-  }
-  if (typeof submitMerge !== "function") {
-    response.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
-    response.end('{"error":"merge-unavailable"}');
-    return true;
-  }
-  try {
-    const persisted = await fetchBounded({
-      url: new URL(plan.upstreamPath, upstream),
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${internalToken}`,
-        "Content-Type": "application/json",
-      },
-      body: Buffer.from(JSON.stringify(plan.promptBody)),
-      timeoutMs: 10_000,
-      maximumBytes: 8 * 1024 * 1024,
-    });
-    const messageID = persistedMessageId(persisted);
-    if (!messageID) {
-      writeBufferedResponse(response, persisted);
-      return true;
-    }
-    const outcome = await submitMerge({
-      parentSessionId: plan.sessionID,
-      argumentsText: plan.argumentsText,
-      requestedBy,
-    });
-    await materializeMergeOutcome({
-      upstream,
-      internalToken,
-      plan,
-      messageID,
-      outcome,
-    });
-    writeBufferedResponse(response, persisted);
-  } catch {
-    if (!response.headersSent) response.writeHead(502, { "content-type": "application/json", "cache-control": "no-store" });
-    response.end('{"error":"merge-dispatch-failed"}');
-  }
-  return true;
-}
-
 function proxyUpgrade(request, socket, head, upstream, internalToken) {
   const transport = upstream.protocol === "https:" ? https : http;
   const target = new URL(request.url ?? "/", upstream);
@@ -288,7 +130,6 @@ export async function startPublicGateway({
   sessionSecret,
   internalToken,
   sessionTtlSeconds = 86_400,
-  submitMerge,
 }) {
   const upstream = parseUpstream(upstreamUrl);
   const expectedPassword = strongSecret(password, "password");
@@ -376,8 +217,7 @@ export async function startPublicGateway({
         response.end();
         return;
       }
-      const requestedBy = principal(request);
-      if (!requestedBy) {
+      if (!principal(request)) {
         if (request.headers.authorization) {
           response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
           response.end('{"error":"unauthorized"}');
@@ -388,21 +228,6 @@ export async function startPublicGateway({
           "cache-control": "no-store",
         });
         response.end();
-        return;
-      }
-      if (
-        request.method === "POST"
-        && /^\/session\/ses_[A-Za-z0-9_-]{8,128}\/command$/.test(url.pathname)
-      ) {
-        await handleMergeCommand({
-          request,
-          response,
-          url,
-          upstream,
-          internalToken: runtimeToken,
-          requestedBy,
-          submitMerge,
-        });
         return;
       }
       proxyRequest(request, response, upstream, runtimeToken);

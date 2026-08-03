@@ -35,14 +35,13 @@ export function summarizeWorkerResult(stdout: string) {
   return summary.slice(0, 4_000);
 }
 
-export function parseChangedFileStats(output: string, trustedPaths: string[]): TaskFileView[] {
-  const trusted = new Set(trustedPaths);
+export function parseChangedFileStats(output: string): TaskFileView[] {
   const observed = new Map<string, TaskFileView>();
   for (const line of output.split(/\r?\n/)) {
     if (!line) continue;
     const [added, removed, ...pathParts] = line.split("\t");
     const changedPath = pathParts.join("\t");
-    if (!trusted.has(changedPath)) continue;
+    if (!safeRelativePath(changedPath)) continue;
     if (/^\d+$/.test(added) && /^\d+$/.test(removed)) {
       observed.set(changedPath, {
         path: changedPath,
@@ -53,7 +52,16 @@ export function parseChangedFileStats(output: string, trustedPaths: string[]): T
       observed.set(changedPath, { path: changedPath });
     }
   }
-  return [...trustedPaths].sort().map((changedPath) => observed.get(changedPath) ?? { path: changedPath });
+  return [...observed.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function safeRelativePath(value: string) {
+  const segments = value.split("/");
+  return value.length <= 1_024
+    && !value.startsWith("/")
+    && !value.includes("\\")
+    && !/[\u0000-\u001f\u007f]/.test(value)
+    && segments.every((segment) => segment && segment !== "." && segment !== "..");
 }
 
 function toolStage(tool: string, serialized: string): TaskStage | undefined {

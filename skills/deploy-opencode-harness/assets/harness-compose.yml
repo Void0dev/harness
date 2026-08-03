@@ -43,6 +43,12 @@ services:
     user: "10002:20001"
     environment:
       OPENCODE_RUNTIME_MODE: private
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?set the GitHub App ID}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?set the installation ID}
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+      GITHUB_OWNER: ${GITHUB_OWNER:?set owner}
+      GITHUB_REPO: ${GITHUB_REPO:?set repository}
+      GITHUB_BASE_BRANCH: ${GITHUB_BASE_BRANCH:-stage}
       OPENCODE_INTERNAL_TOKEN: ${OPENCODE_INTERNAL_TOKEN:?set internal token}
       VOID_AI_BASE_URL: ${VOID_AI_BASE_URL:-https://ai-gateway.void0.org/v1}
       VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key
@@ -56,6 +62,7 @@ services:
       - source: void-ai-api-key
         target: /run/secrets/void-ai-api-key
     volumes:
+      - ${GITHUB_APP_PRIVATE_KEY_HOST_PATH:?set the GitHub App private key path}:/run/secrets/github-app.pem:ro
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/opencode:/home/opencode/.local/share/opencode
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/context:/home/opencode/workspace:ro
       - ${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/runs:${HARNESS_DATA_DIR:?set /opt/issue-harness/owner-repository}/runs

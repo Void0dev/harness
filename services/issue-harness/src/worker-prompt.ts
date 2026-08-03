@@ -22,9 +22,13 @@ Rules:
 - Add or update tests when the change has behavioral risk.
 - Run the most relevant verification command available.
 - Commit all completed changes on ${branch}.
+- Push the completed branch with \`harness-github git push --set-upstream origin ${branch}\`.
+- Create or reuse a draft pull request into \`stage\` with \`harness-github gh pr create --base stage --head ${branch} --draft\`.
+- The pull request title must start with \`Fix #${issue.number}:\`.
+- Never merge the feature branch and never open it directly into \`main\`.
 - Write every user-facing explanation and the final summary in Russian. Keep code, paths, identifiers, and commands unchanged.
 - If a human answer is required, ask one concrete human question in Russian between <human-attention> and </human-attention>.
-- When the work is complete and committed, finish with ${COMPLETION_MARKER}.`;
+- Finish only after the draft pull request exists. Then end with ${COMPLETION_MARKER}.`;
 }
 
 export function resumeWorkerPrompt(instruction: string) {

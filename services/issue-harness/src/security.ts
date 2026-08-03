@@ -3,17 +3,6 @@ import { readFileSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-const highConfidenceSecretPatterns = [
-  /\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}\b/g,
-  /\bsk-[A-Za-z0-9_-]{20,}\b/g,
-  /\bglpat-[A-Za-z0-9_-]{20,}\b/g,
-  /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/g,
-  /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}\b/g,
-  /\bAKIA[A-Z0-9]{16}\b/g,
-  /\b(?:api[_-]?key|access[_-]?token|oauth[_-]?token|client[_-]?secret|password)\s*[:=]\s*["']?[A-Za-z0-9_./+=-]{20,}["']?/gi,
-  /\bauthorization:\s*(?:bearer|basic)\s+[^\s]+/gi,
-];
-
 const publicStatuses = {
   "human-attention": {
     schemaVersion: 1,
@@ -24,16 +13,6 @@ const publicStatuses = {
     schemaVersion: 1,
     code: "agent_run_failed",
     message: "The coding run failed. Review trusted local logs before resuming.",
-  },
-  "publication-failed": {
-    schemaVersion: 1,
-    code: "publication_failed",
-    message: "Publication failed. Review trusted local logs before retrying.",
-  },
-  "stale-base": {
-    schemaVersion: 1,
-    code: "publication_base_changed",
-    message: "The base branch changed. The stale artifact was retained for audit; resume to rerun from the fresh base.",
   },
 } as const;
 
@@ -56,25 +35,6 @@ export function redactForGithub(value: string, configuredSecrets: Array<string |
 }
 export function publicHarnessStatus(kind: keyof typeof publicStatuses) {
   return JSON.stringify(publicStatuses[kind]);
-}
-
-export function assertNoHighConfidenceSecrets(
-  value: Buffer | string,
-  configuredSecrets: Array<string | undefined>,
-) {
-  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
-  for (const secret of configuredSecrets) {
-    if (secret && secret.length >= 6 && bytes.includes(Buffer.from(secret))) {
-      throw new Error("Publication artifact contains credential material");
-    }
-  }
-  const text = bytes.toString("utf8");
-  if (highConfidenceSecretPatterns.some((pattern) => {
-    pattern.lastIndex = 0;
-    return pattern.test(text);
-  })) {
-    throw new Error("Publication artifact contains credential material");
-  }
 }
 
 export async function ensurePrivateRuntimeDirectory(directory: string) {

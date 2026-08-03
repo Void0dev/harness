@@ -601,32 +601,40 @@ class ProductContractTest(unittest.TestCase):
                 for marker in markers:
                     self.assertIn(marker, payload)
 
-    def test_product_docs_match_opencode_publisher_and_inventory_contracts(self):
+    def test_product_contract_uses_agent_owned_git_publication_and_standard_gh_merge(self):
         readme = (ROOT / "README.md").read_text()
         deploy_skill = (ROOT / "skills/deploy-opencode-harness/SKILL.md").read_text()
         agent_contract = (
             ROOT / "skills/deploy-opencode-harness/references/agent-contract.md"
         ).read_text()
+        worker_prompt = (ROOT / "services/issue-harness/src/worker-prompt.ts").read_text()
+        harness_index = (ROOT / "services/issue-harness/src/index.ts").read_text()
+        combined = deploy_skill + "\n" + agent_contract
+
+        self.assertIn("harness-github git push", worker_prompt)
+        self.assertIn("harness-github gh pr create", worker_prompt)
+        self.assertIn("--draft", worker_prompt)
+        self.assertNotIn("publishArtifact", harness_index)
+        self.assertNotIn("MergeService", harness_index)
+        self.assertIn("coding agent", combined)
+        self.assertIn("release agent", combined)
+        self.assertIn("`gh`", combined)
+        self.assertIn("harness-github", readme)
+        self.assertIn("release agent", readme)
+        for stale in (
+            "trusted publisher",
+            "content-addressed artifact",
+            "explicit merge authority",
+            "explicit merge orchestration",
+            "custom merge protocol",
+        ):
+            self.assertNotIn(stale, combined)
+            self.assertNotIn(stale, readme)
+
+    def test_image_release_and_inventory_contracts_remain_documented(self):
         image_release = (
             ROOT / "skills/deploy-opencode-harness/references/image-release.md"
         ).read_text()
-        for stale in (
-            "Host Docker socket",
-            "получает Docker socket",
-            "Размещать raw-Docker-socket harness",
-            "Codex subscription или API-key auth",
-            "CODEX_AUTH_MODE` | `subscription` или `api-key`",
-            "Listener push'ит ветку",
-        ):
-            self.assertNotIn(stale, readme)
-        self.assertNotIn("broker jwt", readme.lower())
-        self.assertIn("content-addressed", readme)
-        self.assertIn("trusted publisher", readme)
-        self.assertIn("npm run lint", readme)
-        for document in (deploy_skill, agent_contract):
-            self.assertNotIn("OPENCODE_AUTH_MODE=broker", document)
-            self.assertNotIn("SANDBOX_NETWORK", document)
-            self.assertIn("trusted publisher", document)
         for flag in (
             "--bundle",
             "--custom-trusted-root",

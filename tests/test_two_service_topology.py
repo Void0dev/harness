@@ -27,15 +27,25 @@ class TwoServiceTopologyTest(unittest.TestCase):
         self.assertIn("SERVICE_FQDN_HARNESS_4096: /", harness)
         self.assertNotIn("SERVICE_FQDN_", runtime)
 
-    def test_github_and_web_authority_stay_out_of_model_runtime(self):
-        compose = (ROOT / "coolify" / "harness.production.compose.yml").read_text()
+    def test_github_app_context_is_available_to_both_services_but_web_and_model_secrets_stay_split(self):
+        compose = (
+            ROOT / "skills/deploy-opencode-harness/assets/harness-compose.yml"
+        ).read_text()
         harness = service_block(compose, "harness")
         runtime = service_block(compose, "opencode-runtime")
 
         for marker in (
             "GITHUB_APP_ID",
             "GITHUB_APP_INSTALLATION_ID",
-            "GITHUB_APP_PRIVATE_KEY",
+            "GITHUB_APP_PRIVATE_KEY_PATH",
+            "GITHUB_OWNER",
+            "GITHUB_REPO",
+            "GITHUB_BASE_BRANCH",
+        ):
+            self.assertIn(marker, harness)
+            self.assertIn(marker, runtime)
+
+        for marker in (
             "OPENCODE_SERVER_USERNAME",
             "OPENCODE_SERVER_PASSWORD",
             "OPENCODE_SESSION_SECRET",
@@ -48,6 +58,32 @@ class TwoServiceTopologyTest(unittest.TestCase):
         self.assertIn("OPENCODE_SERVER_URL: http://opencode-runtime:4096", harness)
         self.assertIn('user: "10001:20001"', harness)
         self.assertIn('user: "10002:20001"', runtime)
+
+    def test_every_compose_variant_passes_release_app_credentials_to_runtime(self):
+        variants = (
+            ("docker-compose.local.yml", "GITHUB_APP_PRIVATE_KEY_PATH", "/run/secrets/github-app.pem:ro"),
+            ("coolify/docker-compose.yml", "GITHUB_APP_PRIVATE_KEY_PATH", "/run/secrets/github-app.pem:ro"),
+            ("skills/deploy-opencode-harness/assets/harness-compose.yml", "GITHUB_APP_PRIVATE_KEY_PATH", "/run/secrets/github-app.pem:ro"),
+            ("coolify/harness.production.compose.yml", "GITHUB_APP_PRIVATE_KEY_BASE64_PATH", "source: github-app-pem"),
+        )
+        for relative, key_marker, mount_marker in variants:
+            compose = (ROOT / relative).read_text()
+            harness = service_block(compose, "harness")
+            runtime = service_block(compose, "opencode-runtime")
+            with self.subTest(compose=relative):
+                for marker in (
+                    "GITHUB_APP_ID",
+                    "GITHUB_APP_INSTALLATION_ID",
+                    "GITHUB_OWNER",
+                    "GITHUB_REPO",
+                    "GITHUB_BASE_BRANCH",
+                    key_marker,
+                ):
+                    self.assertIn(marker, harness)
+                    self.assertIn(marker, runtime)
+                self.assertIn(mount_marker, harness)
+                self.assertIn(mount_marker, runtime)
+                self.assertNotIn("GITHUB_TOKEN", compose)
 
     def test_local_and_production_compose_use_the_same_two_service_names(self):
         for relative in (

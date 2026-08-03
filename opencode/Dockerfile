@@ -5,7 +5,10 @@ ARG SOURCE_COMMIT
 LABEL org.opencontainers.image.source=$SOURCE_REPOSITORY \
       org.opencontainers.image.revision=$SOURCE_COMMIT
 
-RUN npm install -g opencode-ai@1.18.7 \
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git gh \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install -g opencode-ai@1.18.7 \
   && groupadd -g 20001 harness-shared \
   && useradd -m -u 10002 -g 20001 opencode \
   && install -d -o opencode -g harness-shared -m 0700 \
@@ -21,6 +24,8 @@ COPY opencode/auth.mjs /opt/opencode/auth.mjs
 COPY opencode/lib /opt/opencode/lib
 COPY opencode/ui /opt/opencode/ui
 COPY --chown=10002:20001 opencode/web-config /home/opencode/.config/opencode
+RUN ln -s /opt/opencode/lib/harness-github.mjs /usr/local/bin/harness-github \
+  && chmod 0755 /opt/opencode/lib/harness-github.mjs
 
 USER opencode
 ENV HOME=/home/opencode \

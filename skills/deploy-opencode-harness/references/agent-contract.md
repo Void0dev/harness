@@ -22,7 +22,7 @@ ai:backlog -> ai:todo -> ai:running -> ai:finished
 - `HEALTH_PORT=3000`
 - optional 32+ character `HARNESS_HEALTH_DETAILS_TOKEN`
 
-The public Harness additionally receives login credentials and a 32+ character session-signing secret. The private `opencode-runtime` receives `VOID_AI_BASE_URL`, `VOID_AI_API_KEY`, `VOID_AI_MODEL_ID`, and the OpenCode SQLite volume. Harness must never receive the model API key; the runtime must never receive web credentials or GitHub authority.
+Both services receive the same repository-scoped GitHub App ID, Installation ID, owner, repository, base branch, and read-only PEM mount. The public Harness additionally receives login credentials and a 32+ character session-signing secret. The private `opencode-runtime` receives `VOID_AI_BASE_URL`, `VOID_AI_API_KEY`, `VOID_AI_MODEL_ID`, and the OpenCode SQLite volume. Harness must never receive the model API key; the runtime must never receive web credentials or the session-signing secret.
 
 ## OpenCode sessions and context
 
@@ -37,15 +37,15 @@ The public Harness additionally receives login credentials and a 32+ character s
 ## Trust boundaries
 
 - No Sandcastle, model broker, Docker socket, or separate coding container is part of this architecture.
-- The public `harness` is the authenticated web gateway, Issue worker, trusted publisher, and explicit merge authority.
+- The public `harness` is the authenticated web gateway and Issue worker.
 - The private `opencode-runtime` has no public route and accepts only the internal bearer supplied by Harness.
-- The GitHub App PEM and installation tokens enter only Harness.
+- The GitHub App PEM and repository coordinates are available to both services so coding and release agents can authenticate GitHub CLI operations.
 - The Void gateway key enters only `opencode-runtime`.
 - The browser never receives `HARNESS_COMMAND_TOKEN` or `OPENCODE_INTERNAL_TOKEN`.
 - OpenCode plugins reach privileged Harness commands through a loopback-only web proxy; the proxy adds the real command token server-side.
 - Target Coolify credentials never enter Harness coding sessions.
-- Harness exports a content-addressed artifact from the isolated checkout. The trusted publisher reclones current `stage`, validates the artifact, creates the commit, pushes `opencode/issue-*`, and opens a draft PR.
-- Normal Issue processing always stops at that draft PR. Only authenticated `/merge stage`, `/merge stage #<issue>`, or `/merge prod` requests can merge; production is always a `stage -> main` pull request.
+- The coding agent works in the isolated checkout, creates its own commit, pushes `opencode/issue-*` with `harness-github git`, and creates or reuses a draft PR into `stage` with `harness-github gh`.
+- Normal Issue processing always stops at that draft PR. Authenticated `/merge stage`, `/merge stage #<issue>`, or `/merge prod` starts a separate ordinary release agent, which reads current GitHub state and performs the requested operation with `gh`. Production is always a `stage -> main` pull request.
 
 ## Operational endpoints
 
@@ -57,11 +57,11 @@ The public Harness additionally receives login credentials and a 32+ character s
 - `POST /commands/issues`: create an Issue for `/issue`.
 - `POST /commands/answers`: accept a reply only for a real model question.
 - `POST /commands/retries`: explicitly retry a recoverable technical failure.
-- The authenticated public gateway intercepts only exact `/merge` command payloads and dispatches one stage merge or production promotion in-process; no runtime merge endpoint is exposed.
+- `/merge` is handled as an ordinary release-agent task. Harness owns no merge endpoint, merge service, or operation ledger; the release agent uses current GitHub state and standard `gh` commands.
 - `GET /ui/tasks`: return the sanitized durable task projection for one parent session.
 
 Online verification must use one fixed HTTPS origin, reject redirects and credentials in URLs, and cap response size.
 
 ## Completion
 
-The verified default flow is Issue → visible parent → OpenCode child session → isolated checkout → content-addressed artifact → trusted publisher → `opencode/issue-*` branch → draft PR against `stage`, with no automatic merge. The explicit release flows are feature PR → `stage` and `stage` → `main`.
+The verified default flow is Issue → visible parent → OpenCode child session → isolated checkout → coding agent commit → push of `opencode/issue-*` → draft PR against `stage`, with no automatic merge. The explicit release flows run in a separate release agent through `gh`: feature PR → `stage` and `stage` → `main`.

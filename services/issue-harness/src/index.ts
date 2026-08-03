@@ -1,5 +1,5 @@
 import { config } from "./env.js";
-import { humanAttentionQuestion } from "./completion.js";
+import { assertDraftPullRequestMatchesRun, humanAttentionQuestion } from "./completion.js";
 import { branchName } from "./git.js";
 import { GithubTracker } from "./github.js";
 import { createGitHubAppCredentials } from "./github-app.js";
@@ -15,13 +15,12 @@ import {
   githubRepositoryRemote,
   prepareIsolatedExecutionWorkspace,
 } from "./repository.js";
-import { nextRunAction, recoverStalePublication, StateStore, type IssueRunState } from "./state.js";
+import { nextRunAction, StateStore, type IssueRunState } from "./state.js";
 import {
   acquireProcessLock,
   ensurePrivateRuntimeDirectory,
   ensureRuntimeIdentity,
 } from "./security.js";
-import { publishArtifact, StalePublicationArtifactError } from "./publisher.js";
 import { RunScheduler } from "./scheduler.js";
 import { parseIssueModelId, parseParentSessionId } from "./opencode.js";
 import { refreshContextCheckout, withFreshContext } from "./context.js";
@@ -33,17 +32,9 @@ import { workerFailureQuestion } from "./worker-error.js";
 import { acceptsHumanAnswer, acceptsTechnicalRetry, sanitizeTaskView, taskViewsForParent, technicalRetryTransition, workerSessionDirectory, type TaskStatus, type TaskView } from "./task-view.js";
 import { evaluateHumanCommentWindow } from "./human-comments.js";
 import { startPublicGateway } from "../../../opencode/lib/public-gateway.mjs";
-import { MergeService } from "./merge-service.js";
 
 const state = new StateStore(config.dataDir);
 const remoteUrl = githubRepositoryRemote(config.owner, config.repo);
-const outboundSecrets = [
-  config.healthDetailsToken,
-  config.harnessCommandToken,
-  config.openCodeInternalToken,
-  config.webPassword,
-  config.webSessionSecret,
-];
 const openCode = new OpenCodeClient({
   baseUrl: config.openCodeServerUrl,
   internalToken: config.openCodeInternalToken,
@@ -201,15 +192,6 @@ async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker[
 
   await tracker.moveStatus(issue.number, "running");
   if (!existing) await tracker.comment(issue.number, `OpenCode picked this up on branch \`${branch}\`.`);
-
-  if (action === "publish") {
-    if (existing) {
-      const { updatedAt: _updatedAt, pendingHumanReply: _reply, awaitingAction: _action, ...persisted } = existing;
-      await state.set({ ...persisted, status: "publish_pending", parentSessionId });
-    }
-    await publishIssue(issue, branch);
-    return;
-  }
 
   if (action === "resume" && existing) {
     await resumeCoding(issue, existing, parentSessionId, issueOpenCode);
@@ -391,12 +373,10 @@ async function handleAgentResult(
     }, issue, generationPatch(result)), question);
     return;
   }
-  if (!result.publicationArtifact) throw new Error("Completed agent run did not produce a publication artifact");
-  await state.set(withTaskView({
+  const verifying = withTaskView({
     ...currentRun,
-    status: "publish_pending",
+    status: "running",
     lastSessionId: result.sessionId,
-    publicationArtifact: result.publicationArtifact,
     awaitingAction: undefined,
     pendingHumanReply: undefined,
   }, issue, {
@@ -406,8 +386,45 @@ async function handleAgentResult(
     summary: result.summary,
     files: result.files,
     ...generationPatch(result),
-  }));
-  await publishIssue(issue, activeState.branch);
+  });
+  await state.set(verifying);
+  let pullRequest;
+  try {
+    pullRequest = await retryTransient(async () => {
+      const found = await tracker.findHarnessPullRequest(issue.number, activeState.branch);
+      if (!found) throw new Error("The coding agent did not create the expected draft pull request");
+      if (!result.headSha) throw new Error("The completed coding run is missing its branch head SHA");
+      assertDraftPullRequestMatchesRun({
+        pullRequest: found,
+        branch: activeState.branch,
+        headSha: result.headSha,
+        baseBranch: config.baseBranch,
+      });
+      return found;
+    }, { attempts: 3, delayMs: 1_000 });
+  } catch (error) {
+    console.error("Pull request verification failed", error);
+    await waitForHuman(issue, {
+      ...verifying,
+      status: "awaiting_human",
+      awaitingAction: "resume_child",
+    }, "Агент завершил работу, но ожидаемый draft PR в stage не найден. Проверьте GitHub и отправьте /retry в этом чате, чтобы агент повторил публикацию.", "failed");
+    return;
+  }
+  await state.set(withTaskView({
+    ...verifying,
+    status: "finished",
+    prNumber: pullRequest.number,
+    prUrl: pullRequest.url,
+    prHeadSha: pullRequest.headSha,
+  }, issue, { status: "finished", prUrl: pullRequest.url, question: undefined }));
+  try {
+    await tracker.moveStatus(issue.number, "finished");
+    await tracker.comment(issue.number, `Finished. Pull request: ${pullRequest.url}`);
+  } catch (error) {
+    console.error("Finished Issue synchronization failed", error);
+  }
+  await cleanupWorkspaceStorage();
 }
 
 function generationPatch(result: AgentRunResult) {
@@ -548,86 +565,6 @@ function clearHumanCommentWindow(run: IssueRunState): Omit<IssueRunState, "updat
   return rest;
 }
 
-async function publishIssue(
-  issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>,
-  branch: string,
-) {
-  let pending = state.get(issue.number);
-  if (!pending?.publicationArtifact) throw new Error("Refusing to publish without an immutable publication artifact");
-  await state.set(withTaskView(withoutTimestamp(pending), issue, {
-    status: "publishing",
-    stages: appendObservedStage(pending.taskView?.stages ?? ["accepted", "coding"], "publishing"),
-    question: undefined,
-  }));
-  pending = state.get(issue.number);
-  if (!pending?.publicationArtifact) throw new Error("Publication state was lost before publishing");
-  try {
-    const published = await retryTransient(async () => {
-      const artifact = await publishArtifact({
-        dataDir: config.dataDir,
-        remoteUrl,
-        baseBranch: config.baseBranch,
-        issueNumber: issue.number,
-        branch,
-        artifact: pending.publicationArtifact!,
-        gitEnv: await currentGitAuthEnvironment(),
-        configuredSecrets: outboundSecrets,
-      });
-      const prUrl = await tracker.findOrCreatePullRequest(
-        issue.number,
-        branch,
-        issue.title,
-        `Automated OpenCode child-session run for #${issue.number}.`,
-      );
-      const pullRequest = await tracker.findHarnessPullRequest(issue.number, branch);
-      if (!pullRequest || pullRequest.url !== prUrl) {
-        throw new Error("GitHub did not return the Harness pull request after publication");
-      }
-      return {
-        commitSha: artifact.commitSha,
-        prUrl,
-        prNumber: pullRequest.number,
-        prHeadSha: pullRequest.headSha,
-      };
-    }, {
-      attempts: 3,
-      delayMs: 1_000,
-      shouldRetry: (error) => !(error instanceof StalePublicationArtifactError),
-    });
-
-    await state.set(withTaskView({
-      ...withoutTimestamp(pending),
-      status: "finished",
-      publishedCommitSha: published.commitSha,
-      prNumber: published.prNumber,
-      prUrl: published.prUrl,
-      prHeadSha: published.prHeadSha,
-      awaitingAction: undefined,
-      pendingHumanReply: undefined,
-    }, issue, { status: "finished", prUrl: published.prUrl, question: undefined }));
-    await tracker.moveStatus(issue.number, "finished");
-    await tracker.comment(issue.number, `Finished. Pull request: ${published.prUrl}`);
-    await cleanupWorkspaceStorage();
-  } catch (error) {
-    console.error("Publication failed", error);
-    if (error instanceof StalePublicationArtifactError) {
-      const recovered = recoverStalePublication(pending, new Date().toISOString());
-      await waitForHuman(
-        issue,
-        recovered,
-        "Ветка stage изменилась во время работы. Отправьте /retry в этом чате, чтобы повторить задачу на свежем коде.",
-        "failed",
-      );
-      return;
-    }
-    await waitForHuman(issue, {
-      ...withoutTimestamp(pending),
-      status: "awaiting_human",
-      awaitingAction: "retry_publish",
-    }, "Код готов, но после трёх попыток не удалось опубликовать PR. Проверьте соединение с GitHub и отправьте /retry в этом чате, чтобы повторить только публикацию.", "failed");
-  }
-}
-
 function withoutTimestamp(run: IssueRunState): Omit<IssueRunState, "updatedAt"> {
   const { updatedAt: _updatedAt, ...persisted } = run;
   return persisted;
@@ -638,9 +575,8 @@ async function reconcilePersistedStates() {
     let run = loaded;
     if (!run.taskView && run.parentSessionId) {
       const migratedStatus: TaskStatus = run.status === "finished" ? "finished"
-        : run.status === "publish_pending" ? "publishing"
-          : run.status === "awaiting_human" || run.status === "failed" ? "failed" : "running";
-      const migratedStages = run.status === "finished" || run.status === "publish_pending"
+        : run.status === "awaiting_human" || run.status === "failed" ? "failed" : "running";
+      const migratedStages = run.status === "finished"
         ? ["accepted", "studying", "coding", "publishing"] as const
         : ["accepted", "studying"] as const;
       await state.set(withTaskView(withoutTimestamp(run), {
@@ -660,14 +596,9 @@ async function reconcilePersistedStates() {
       await tracker.moveStatus(run.issueNumber, "finished");
       continue;
     }
-    if (run.status === "publish_pending") {
-      await tracker.moveStatus(run.issueNumber, "todo");
-      continue;
-    }
     if (run.status === "failed" || run.status === "awaiting_human") {
       const awaitingAction = run.awaitingAction
-        ?? (run.publicationArtifact ? "retry_publish"
-          : run.lastSessionId && run.workspace && run.baseSha ? "resume_child" : "rerun");
+        ?? (run.lastSessionId && run.workspace && run.baseSha ? "resume_child" : "rerun");
       let reconciled: Omit<IssueRunState, "updatedAt"> = {
         ...withoutTimestamp(run),
         status: "awaiting_human",
@@ -706,8 +637,6 @@ async function main() {
   await state.load();
   await tracker.assertRepositoryAccess();
   await tracker.ensureLabels();
-  const mergeService = new MergeService(state, tracker);
-  await mergeService.recoverIncompleteOperations();
   await reconcilePersistedStates();
   await cleanupWorkspaceStorage();
   await refreshContext();
@@ -781,7 +710,6 @@ async function main() {
     sessionSecret: config.webSessionSecret,
     internalToken: config.openCodeInternalToken,
     sessionTtlSeconds: config.webSessionTtlSeconds,
-    submitMerge: (request) => mergeService.submit(request),
   });
   console.log(`Issue harness started for ${config.owner}/${config.repo}`);
 

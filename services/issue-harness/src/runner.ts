@@ -2,9 +2,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { config } from "./env.js";
 import { TrackerIssue } from "./github.js";
-import { createExecutionBranch, branchHasCommits } from "./repository.js";
-import { assertAgentRunPublishable, COMPLETION_MARKER, hasHumanAttention } from "./completion.js";
-import { createPublicationArtifact, loadPublicationArtifact } from "./artifact.js";
+import { branchHasCommits, branchHead, createExecutionBranch, worktreeIsClean } from "./repository.js";
+import { assertAgentRunComplete, COMPLETION_MARKER, hasHumanAttention } from "./completion.js";
 import { OpenCodeClient } from "./opencode-client.js";
 import { parseChangedFileStats, summarizeWorkerResult } from "./progress.js";
 import type { TaskFileView } from "./task-view.js";
@@ -23,7 +22,7 @@ export type AgentRunResult = {
   modelId?: string;
   generationStartedAt?: string;
   generationCompletedAt?: string;
-  publicationArtifact?: Awaited<ReturnType<typeof createPublicationArtifact>>;
+  headSha?: string;
 };
 
 function defaultClient() {
@@ -125,30 +124,18 @@ async function finalizeAgentResponse(options: {
   generationCompletedAt?: string;
   client: OpenCodeClient;
 }) {
-  const hasBranchCommits = await branchHasCommits(options.workspace, options.baseSha, options.branch);
-  assertAgentRunPublishable({
+  const [hasBranchCommits, worktreeClean, headSha] = await Promise.all([
+    branchHasCommits(options.workspace, options.baseSha, options.branch),
+    worktreeIsClean(options.workspace),
+    branchHead(options.workspace, options.branch),
+  ]);
+  assertAgentRunComplete({
     stdout: options.stdout,
     completionSignal: options.stdout.includes(COMPLETION_MARKER) ? COMPLETION_MARKER : undefined,
     hasBranchCommits,
+    worktreeClean,
   });
-  const publicationArtifact = hasHumanAttention(options.stdout)
-    ? undefined
-    : await createPublicationArtifact({
-        dataDir: config.dataDir,
-        issueNumber: options.issue.number,
-        branch: options.branch,
-        workspace: options.workspace,
-        baseSha: options.baseSha,
-        configuredSecrets: [config.healthDetailsToken, config.openCodeInternalToken],
-      });
-  const files = publicationArtifact
-    ? await changedFileViews(options, (await loadPublicationArtifact({
-        dataDir: config.dataDir,
-        issueNumber: options.issue.number,
-        branch: options.branch,
-        reference: publicationArtifact,
-      })).manifest.paths)
-    : undefined;
+  const files = hasHumanAttention(options.stdout) ? undefined : await changedFileViews(options);
   return {
     stdout: options.stdout,
     sessionId: options.sessionId,
@@ -158,13 +145,12 @@ async function finalizeAgentResponse(options: {
     ...(options.modelId ? { modelId: options.modelId } : {}),
     ...(options.generationStartedAt ? { generationStartedAt: options.generationStartedAt } : {}),
     ...(options.generationCompletedAt ? { generationCompletedAt: options.generationCompletedAt } : {}),
-    publicationArtifact,
+    ...(hasHumanAttention(options.stdout) ? {} : { headSha }),
   } satisfies AgentRunResult;
 }
 
 async function changedFileViews(
   options: { workspace: string; baseSha: string; branch: string },
-  trustedPaths: string[],
 ) {
   const result = await execFileAsync("git", [
     "-c", "core.hooksPath=/dev/null",
@@ -183,5 +169,5 @@ async function changedFileViews(
     },
     maxBuffer: 2 * 1024 * 1024,
   });
-  return parseChangedFileStats(result.stdout, trustedPaths);
+  return parseChangedFileStats(result.stdout);
 }

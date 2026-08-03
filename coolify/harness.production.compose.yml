@@ -2,7 +2,7 @@
 # Coolify's Docker daemon clones the public Harness repository at main and builds
 # both images locally. No GitHub Packages registry or Coolify GitHub App is used.
 # Coolify supplies GITHUB_APP_PRIVATE_KEY only while Docker Compose creates the
-# github-app-pem secret. Docker then mounts it read-only in harness only.
+# github-app-pem secret. Docker mounts it read-only in both repository-scoped services.
 # Deployment automation replaces the marker in the top-level config only in
 # memory before sending Compose to Coolify. Do not set VOID_AI_API_KEY as a
 # Coolify Service environment variable: beta.470 exposes Service variables to
@@ -73,6 +73,12 @@ services:
     environment:
       OPENCODE_RUNTIME_MODE: private
       OPENCODE_INTERNAL_TOKEN: ${OPENCODE_INTERNAL_TOKEN:?set a 32+ character internal token}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?set the GitHub App ID}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?set the GitHub App installation ID}
+      GITHUB_APP_PRIVATE_KEY_BASE64_PATH: /run/secrets/github-app.pem.b64
+      GITHUB_OWNER: ${GITHUB_OWNER:?set the repository owner}
+      GITHUB_REPO: ${GITHUB_REPO:?set the repository name}
+      GITHUB_BASE_BRANCH: stage
       VOID_AI_BASE_URL: ${VOID_AI_BASE_URL:-https://ai-gateway.void0.org/v1}
       VOID_AI_API_KEY_FILE: /run/secrets/void-ai-api-key
       OPENCODE_PROJECT_DIR: /opt/issue-harness/data/context
@@ -84,6 +90,10 @@ services:
     configs:
       - source: void-ai-api-key
         target: /run/secrets/void-ai-api-key
+    secrets:
+      - source: github-app-pem
+        target: github-app.pem.b64
+        mode: 0444
     volumes:
       - type: volume
         source: harness-context
