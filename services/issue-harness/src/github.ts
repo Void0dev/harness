@@ -2,6 +2,7 @@ import { Octokit } from "@octokit/rest";
 import { config } from "./env.js";
 import { labelColors, labels, statusLabels } from "./labels.js";
 import { parseParentSessionId } from "./opencode.js";
+import type { TrustedHumanComment } from "./human-comments.js";
 
 const trustedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
@@ -128,13 +129,41 @@ export class GithubTracker {
       .join("\n\n---\n\n");
   }
 
+  async humanReplies(issueNumber: number, afterCommentId: number): Promise<TrustedHumanComment[]> {
+    if (!Number.isSafeInteger(afterCommentId) || afterCommentId <= 0) {
+      throw new Error("Invalid Harness question comment ID");
+    }
+    const comments = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
+      owner: config.owner,
+      repo: config.repo,
+      issue_number: issueNumber,
+      per_page: 100,
+    });
+    return comments.flatMap((comment) => {
+      const body = comment.body?.trim() ?? "";
+      const id = comment.id;
+      const author = comment.user?.login ?? "";
+      const createdAt = comment.created_at;
+      if (
+        !Number.isSafeInteger(id)
+        || id <= afterCommentId
+        || !trustedAssociations.has(comment.author_association)
+        || comment.user?.type === "Bot"
+        || !author
+        || !body
+        || Number.isNaN(Date.parse(createdAt))
+      ) return [];
+      return [{ id, author, body, createdAt }];
+    }).sort((left, right) => left.id - right.id);
+  }
+
   async moveStatus(issueNumber: number, status: keyof Pick<typeof labels, "todo" | "running" | "finished">) {
     await this.setStatusLabel(issueNumber, labels[status]);
   }
 
   async needsHuman(issueNumber: number, body: string) {
     await this.markNeedsHuman(issueNumber);
-    await this.comment(issueNumber, `Human attention needed:\n\n${body}`);
+    return await this.comment(issueNumber, `Human attention needed:\n\n${body}`);
   }
 
   async markNeedsHuman(issueNumber: number) {
@@ -165,12 +194,19 @@ export class GithubTracker {
   }
 
   async comment(issueNumber: number, body: string) {
-    await this.octokit.rest.issues.createComment({
+    const response = await this.octokit.rest.issues.createComment({
       owner: config.owner,
       repo: config.repo,
       issue_number: issueNumber,
       body,
     });
+    if (
+      !Number.isSafeInteger(response.data.id)
+      || response.data.id <= 0
+      || typeof response.data.created_at !== "string"
+      || Number.isNaN(Date.parse(response.data.created_at))
+    ) throw new Error("GitHub returned invalid comment metadata");
+    return { id: response.data.id, createdAt: new Date(response.data.created_at).toISOString() };
   }
 
   async findOrCreatePullRequest(issueNumber: number, branch: string, title: string, body: string) {

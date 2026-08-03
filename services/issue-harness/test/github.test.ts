@@ -193,13 +193,21 @@ test("moves needs-human work out of running and removes needs-human when resumed
       issues: {
         addLabels: async ({ labels }: { labels: string[] }) => events.push(`add:${labels.join(",")}`),
         removeLabel: async ({ name }: { name: string }) => events.push(`remove:${name}`),
-        createComment: async () => ({ data: {} }),
+        createComment: async () => ({
+          data: {
+            id: 9001,
+            created_at: "2026-08-03T10:00:00.000Z",
+          },
+        }),
       },
     },
   };
   const tracker = new GithubTracker(fake as never);
 
-  await tracker.needsHuman(57, "Question");
+  assert.deepEqual(await tracker.needsHuman(57, "Question"), {
+    id: 9001,
+    createdAt: "2026-08-03T10:00:00.000Z",
+  });
   assert.equal(events[0], "add:ai:needs-human");
   assert.ok(events.includes("remove:ai:running"));
 
@@ -207,6 +215,70 @@ test("moves needs-human work out of running and removes needs-human when resumed
   await tracker.moveStatus(57, "todo");
   assert.equal(events[0], "add:ai:todo");
   assert.ok(events.includes("remove:ai:needs-human"));
+});
+
+test("returns only trusted human replies posted after the Harness question", async () => {
+  const { GithubTracker } = await import("../src/github.js");
+  const comments = [
+    {
+      id: 90,
+      body: "Old context",
+      created_at: "2026-08-03T09:00:00.000Z",
+      author_association: "OWNER",
+      user: { login: "alice", type: "User" },
+    },
+    {
+      id: 101,
+      body: "Untrusted suggestion",
+      created_at: "2026-08-03T10:01:00.000Z",
+      author_association: "NONE",
+      user: { login: "stranger", type: "User" },
+    },
+    {
+      id: 102,
+      body: "Harness status",
+      created_at: "2026-08-03T10:02:00.000Z",
+      author_association: "MEMBER",
+      user: { login: "harness[bot]", type: "Bot" },
+    },
+    {
+      id: 104,
+      body: "Second answer",
+      created_at: "2026-08-03T10:04:00.000Z",
+      author_association: "COLLABORATOR",
+      user: { login: "bob", type: "User" },
+    },
+    {
+      id: 103,
+      body: "First answer",
+      created_at: "2026-08-03T10:03:00.000Z",
+      author_association: "OWNER",
+      user: { login: "alice", type: "User" },
+    },
+  ];
+  const fake = {
+    rest: { issues: { listComments: async () => ({ data: [] }) } },
+    paginate: async () => comments,
+  };
+  const tracker = new GithubTracker(fake as never);
+
+  assert.equal(typeof (tracker as unknown as { humanReplies?: unknown }).humanReplies, "function");
+  assert.deepEqual(await (tracker as unknown as {
+    humanReplies(issueNumber: number, afterCommentId: number): Promise<unknown>;
+  }).humanReplies(57, 100), [
+    {
+      id: 103,
+      author: "alice",
+      body: "First answer",
+      createdAt: "2026-08-03T10:03:00.000Z",
+    },
+    {
+      id: 104,
+      author: "bob",
+      body: "Second answer",
+      createdAt: "2026-08-03T10:04:00.000Z",
+    },
+  ]);
 });
 
 test("prefers an existing running Issue over newly queued work", async () => {

@@ -126,6 +126,9 @@ test("persists the parent and worker OpenCode session relationship", async (t) =
     baseSha: "a".repeat(40),
     awaitingAction: "resume_child",
     pendingHumanReply: "Use PostgreSQL",
+    humanQuestionCommentId: 9001,
+    humanLatestCommentId: 9002,
+    humanCommentResumeAfter: "2026-08-03T10:03:00.000Z",
   });
 
   const reloaded = new StateStore(dataDir);
@@ -134,6 +137,32 @@ test("persists the parent and worker OpenCode session relationship", async (t) =
   assert.equal(reloaded.get(57)?.lastSessionId, "ses_worker_12345678");
   assert.equal(reloaded.getByParentSession("ses_parent_12345678")?.issueNumber, 57);
   assert.equal(reloaded.get(57)?.pendingHumanReply, "Use PostgreSQL");
+  assert.equal(reloaded.get(57)?.humanQuestionCommentId, 9001);
+  assert.equal(reloaded.get(57)?.humanLatestCommentId, 9002);
+  assert.equal(reloaded.get(57)?.humanCommentResumeAfter, "2026-08-03T10:03:00.000Z");
+});
+
+test("rejects malformed durable GitHub comment debounce state", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "issue-harness-state-invalid-comments-"));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const store = new StateStore(dataDir);
+  await store.load();
+
+  await assert.rejects(store.set({
+    issueNumber: 59,
+    branch: "opencode/issue-59-comments",
+    status: "awaiting_human",
+    humanQuestionCommentId: 0,
+  } as never), /human question comment/i);
+
+  await assert.rejects(store.set({
+    issueNumber: 59,
+    branch: "opencode/issue-59-comments",
+    status: "awaiting_human",
+    humanQuestionCommentId: 9001,
+    humanLatestCommentId: 9002,
+    humanCommentResumeAfter: "not-a-date",
+  } as never), /human comment resume/i);
 });
 
 test("rejects malformed OpenCode session identifiers in durable state", async (t) => {

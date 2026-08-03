@@ -31,6 +31,7 @@ import { cleanupExpiredWorkspaces } from "./retention.js";
 import { appendObservedStage, stageFromMessageParts } from "./progress.js";
 import { workerFailureQuestion } from "./worker-error.js";
 import { acceptsHumanAnswer, acceptsTechnicalRetry, sanitizeTaskView, taskViewsForParent, technicalRetryTransition, workerSessionDirectory, type TaskStatus, type TaskView } from "./task-view.js";
+import { evaluateHumanCommentWindow } from "./human-comments.js";
 
 const state = new StateStore(config.dataDir);
 const remoteUrl = githubRepositoryRemote(config.owner, config.repo);
@@ -104,6 +105,7 @@ async function refreshContext() {
 
 async function tick() {
   if (workspaceCleanupInProgress) return;
+  await reconcileHumanCommentReplies();
   await scheduler.poll(
     async () => {
       pollState = "polling";
@@ -425,11 +427,104 @@ async function waitForHuman(
   cardStatus: TaskStatus = "awaiting_human",
 ) {
   await state.set(withTaskView(
-    { ...run, status: "awaiting_human", pendingHumanReply: undefined },
+    {
+      ...run,
+      status: "awaiting_human",
+      pendingHumanReply: undefined,
+      humanQuestionCommentId: undefined,
+      humanLatestCommentId: undefined,
+      humanCommentResumeAfter: undefined,
+    },
     issue,
     { status: cardStatus, question },
   ));
-  await tracker.needsHuman(issue.number, question);
+  const questionComment = await tracker.needsHuman(issue.number, question);
+  if (cardStatus !== "awaiting_human") return;
+  const current = state.get(issue.number);
+  if (
+    !current
+    || !acceptsHumanAnswer(current)
+    || current.taskView?.question !== question
+  ) return;
+  await state.set({
+    ...withoutTimestamp(current),
+    humanQuestionCommentId: questionComment.id,
+  });
+}
+
+async function reconcileHumanCommentReplies() {
+  for (const snapshot of state.all()) {
+    if (
+      snapshot.pendingHumanReply
+      && snapshot.awaitingAction === "resume_child"
+      && snapshot.humanQuestionCommentId
+    ) {
+      await tracker.moveStatus(snapshot.issueNumber, "todo");
+      const current = state.get(snapshot.issueNumber);
+      if (current?.pendingHumanReply === snapshot.pendingHumanReply) {
+        await state.set(clearHumanCommentWindow(current));
+      }
+      continue;
+    }
+    if (!acceptsHumanAnswer(snapshot) || !snapshot.humanQuestionCommentId) continue;
+
+    const comments = await tracker.humanReplies(snapshot.issueNumber, snapshot.humanQuestionCommentId);
+    const current = state.get(snapshot.issueNumber);
+    if (
+      !current
+      || !acceptsHumanAnswer(current)
+      || current.humanQuestionCommentId !== snapshot.humanQuestionCommentId
+    ) continue;
+
+    const result = evaluateHumanCommentWindow({
+      questionCommentId: current.humanQuestionCommentId,
+      latestCommentId: current.humanLatestCommentId,
+      resumeAfter: current.humanCommentResumeAfter,
+      comments,
+      now: Date.now(),
+    });
+    if (result.kind === "idle") continue;
+    if (result.kind === "waiting") {
+      if (
+        current.humanLatestCommentId === result.latestCommentId
+        && current.humanCommentResumeAfter === result.resumeAfter
+      ) continue;
+      await state.set({
+        ...withoutTimestamp(current),
+        humanLatestCommentId: result.latestCommentId,
+        humanCommentResumeAfter: result.resumeAfter,
+      });
+      continue;
+    }
+    await queueHumanReply(current, result.reply);
+  }
+}
+
+async function queueHumanReply(current: IssueRunState, text: string) {
+  if (!acceptsHumanAnswer(current) || !current.awaitingAction) return null;
+  await state.set(withTaskView({
+    ...withoutTimestamp(current),
+    status: "running",
+    pendingHumanReply: text,
+  }, {
+    number: current.issueNumber,
+    title: current.taskView?.title ?? `Issue #${current.issueNumber}`,
+    html_url: current.taskView?.issueUrl,
+  }, { status: "running", question: undefined }));
+  await tracker.moveStatus(current.issueNumber, "todo");
+  const queued = state.get(current.issueNumber);
+  if (queued?.pendingHumanReply === text) await state.set(clearHumanCommentWindow(queued));
+  return { issueNumber: current.issueNumber };
+}
+
+function clearHumanCommentWindow(run: IssueRunState): Omit<IssueRunState, "updatedAt"> {
+  const {
+    humanQuestionCommentId: _questionCommentId,
+    humanLatestCommentId: _latestCommentId,
+    humanCommentResumeAfter: _resumeAfter,
+    ...rest
+  } = withoutTimestamp(run);
+  return rest;
 }
 
 async function publishIssue(
@@ -626,18 +721,7 @@ async function main() {
     getTaskViews: projectedTaskViews,
     submitHumanAnswer: withFreshContext(refreshContext, async ({ text, parentSessionId }) => {
       const current = state.getByParentSession(parentSessionId);
-      if (!current || !acceptsHumanAnswer(current) || !current.awaitingAction) return null;
-      await state.set(withTaskView({
-        ...withoutTimestamp(current),
-        status: "running",
-        pendingHumanReply: text,
-      }, {
-        number: current.issueNumber,
-        title: current.taskView?.title ?? `Issue #${current.issueNumber}`,
-        html_url: current.taskView?.issueUrl,
-      }, { status: "running", question: undefined }));
-      await tracker.moveStatus(current.issueNumber, "todo");
-      return { issueNumber: current.issueNumber };
+      return current ? await queueHumanReply(current, text) : null;
     }),
     submitRetry: async ({ parentSessionId, instruction }) => {
       const current = state.getByParentSession(parentSessionId);
