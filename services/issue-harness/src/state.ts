@@ -10,7 +10,6 @@ export type IssueRunState = {
   status: "running" | "awaiting_human" | "finished" | "failed";
   parentSessionId?: string;
   lastSessionId?: string;
-  lastLogPath?: string;
   workspace?: string;
   baseSha?: string;
   awaitingAction?: "resume_child" | "rerun";
@@ -19,9 +18,7 @@ export type IssueRunState = {
   humanLatestCommentId?: number;
   humanCommentResumeAfter?: string;
   taskView?: TaskView;
-  prNumber?: number;
   prUrl?: string;
-  prHeadSha?: string;
   updatedAt: string;
 };
 
@@ -157,14 +154,7 @@ function validateRunState(value: unknown): IssueRunState {
     typeof source.baseSha !== "string"
     || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(source.baseSha)
   )) throw new Error("Invalid base SHA");
-  if (source.prNumber !== undefined && (!Number.isSafeInteger(source.prNumber) || Number(source.prNumber) <= 0)) {
-    throw new Error("Invalid pull request number");
-  }
   if (source.prUrl !== undefined) validateCredentialFreeHttpsUrl(source.prUrl, "Pull request URL");
-  if (source.prHeadSha !== undefined && (
-    typeof source.prHeadSha !== "string"
-    || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(source.prHeadSha)
-  )) throw new Error("Invalid pull request head SHA");
 
   let awaitingAction = source.awaitingAction;
   if (legacyPublication) {
@@ -209,7 +199,6 @@ function validateRunState(value: unknown): IssueRunState {
     status: status as IssueRunState["status"],
     ...optionalString("parentSessionId", source.parentSessionId),
     ...(legacyPublication ? {} : optionalString("lastSessionId", source.lastSessionId)),
-    ...(legacyPublication ? {} : optionalString("lastLogPath", source.lastLogPath)),
     ...(legacyPublication ? {} : optionalString("workspace", source.workspace)),
     ...(legacyPublication ? {} : optionalString("baseSha", source.baseSha)),
     ...(awaitingAction === undefined ? {} : { awaitingAction: awaitingAction as IssueRunState["awaitingAction"] }),
@@ -218,9 +207,7 @@ function validateRunState(value: unknown): IssueRunState {
     ...(legacyPublication ? {} : optionalNumber("humanLatestCommentId", source.humanLatestCommentId)),
     ...(legacyPublication ? {} : optionalString("humanCommentResumeAfter", source.humanCommentResumeAfter)),
     ...(normalizedTaskView === undefined ? {} : { taskView: normalizedTaskView }),
-    ...optionalNumber("prNumber", source.prNumber),
     ...optionalString("prUrl", source.prUrl),
-    ...optionalString("prHeadSha", source.prHeadSha),
     updatedAt: new Date(source.updatedAt).toISOString(),
   };
 }

@@ -10,19 +10,10 @@ function requiredInteger(env, name) {
 }
 
 async function privateKey(env) {
-  if (env.GITHUB_APP_PRIVATE_KEY_PATH) {
-    try {
-      return await fs.readFile(env.GITHUB_APP_PRIVATE_KEY_PATH, "utf8");
-    } catch (error) {
-      if (error?.code !== "ENOENT" || !env.GITHUB_APP_PRIVATE_KEY_BASE64_PATH) throw error;
-    }
+  if (!env.GITHUB_APP_PRIVATE_KEY_PATH) {
+    throw new Error("GITHUB_APP_PRIVATE_KEY_PATH is required");
   }
-  if (env.GITHUB_APP_PRIVATE_KEY_BASE64_PATH) {
-    const encoded = (await fs.readFile(env.GITHUB_APP_PRIVATE_KEY_BASE64_PATH, "utf8")).trim();
-    if (!encoded) throw new Error("GITHUB_APP_PRIVATE_KEY_BASE64_PATH is empty");
-    return Buffer.from(encoded, "base64").toString("utf8");
-  }
-  throw new Error("GITHUB_APP_PRIVATE_KEY_PATH or GITHUB_APP_PRIVATE_KEY_BASE64_PATH is required");
+  return fs.readFile(env.GITHUB_APP_PRIVATE_KEY_PATH, "utf8");
 }
 
 function encodeJson(value) {

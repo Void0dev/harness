@@ -14,7 +14,7 @@ from collections.abc import Iterable, Mapping
 
 REQUIRED_CAPABILITY_OUTCOMES = (
     "bounded-command",
-    "artifact-materialization",
+    "deployment-definition",
     "persistence",
     "secret-storage",
     "service-reconcile-lifecycle",
@@ -50,16 +50,13 @@ _STATE_FIELDS = {
     "metadata",
 }
 _METADATA_FIELDS = {
-    "artifact_digest",
     "completed_operations",
     "created_at",
     "desired_state_digest",
-    "diagnostics_ref",
     "github_app_id",
     "github_app_installation_id",
     "last_error_code",
     "public_url",
-    "release_status",
     "updated_at",
 }
 _SENSITIVE_FIELD_PARTS = {

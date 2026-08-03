@@ -49,7 +49,6 @@ services:
       dockerfile: opencode/Dockerfile
     user: "10002:20001"
     environment:
-      OPENCODE_RUNTIME_MODE: private
       OPENCODE_INTERNAL_TOKEN: ${OPENCODE_INTERNAL_TOKEN:?set a 32+ character internal token}
       GITHUB_APP_ID: ${GITHUB_APP_ID:?set the GitHub App ID}
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?set the GitHub App installation ID}

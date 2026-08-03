@@ -57,13 +57,16 @@ export async function prepareProjectWorkspace(options: ProjectWorkspaceOptions) 
   let updated = false;
   if (branch === options.baseBranch && clean) {
     const before = (await git(contextDir, options.gitEnv, "rev-parse", "HEAD")).trim();
+    let canFastForward = true;
     try {
       await git(contextDir, options.gitEnv, "merge-base", "--is-ancestor", before, remote);
-      await git(contextDir, options.gitEnv, "merge", "--ff-only", remote);
-      updated = before !== (await git(contextDir, options.gitEnv, "rev-parse", "HEAD")).trim();
     } catch (error) {
       if ((error as { code?: number | string }).code !== 1) throw error;
-      // Preserve local commits and let the standard OpenCode agent resolve divergence.
+      canFastForward = false;
+    }
+    if (canFastForward) {
+      await git(contextDir, options.gitEnv, "merge", "--ff-only", remote);
+      updated = before !== (await git(contextDir, options.gitEnv, "rev-parse", "HEAD")).trim();
     }
   }
   const revision = (await git(contextDir, options.gitEnv, "rev-parse", "HEAD")).trim();

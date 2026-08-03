@@ -9,7 +9,6 @@ dist/
 !.env.local.example
 .DS_Store
 .harness/*
-!.harness/config.json
 .omx/
 .sandcastle/
 *.log

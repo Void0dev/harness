@@ -9,8 +9,6 @@ import { parseChangedFileStats, summarizeWorkerResult } from "./progress.js";
 import type { TaskFileView } from "./task-view.js";
 import { buildIssuePrompt, resumeWorkerPrompt } from "./worker-prompt.js";
 
-export { buildIssuePrompt } from "./worker-prompt.js";
-
 const execFileAsync = promisify(execFile);
 
 export type AgentRunResult = {
@@ -88,27 +86,6 @@ export async function resumeAgentSession(options: {
   return completeAgentSession({
     ...options,
     prompt: resumeWorkerPrompt(options.humanReply),
-  });
-}
-
-export async function runAgent(
-  issue: NonNullable<TrackerIssue>,
-  branch: string,
-  comments: string,
-  workspace: string,
-  baseSha: string,
-  parentSessionId?: string,
-  client = defaultClient(),
-) {
-  const started = await startAgentSession(issue, branch, comments, workspace, parentSessionId, client);
-  return completeAgentSession({
-    issue,
-    branch,
-    workspace,
-    baseSha,
-    sessionId: started.sessionId,
-    prompt: started.prompt,
-    client,
   });
 }
 

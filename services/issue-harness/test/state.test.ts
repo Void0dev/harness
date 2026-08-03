@@ -54,6 +54,9 @@ test("loads legacy publication and merge state but persists only the simple run 
         manifestSha256: "a".repeat(64),
       },
       publishedCommitSha: "b".repeat(40),
+      lastLogPath: "/data/logs/issue-42.log",
+      prNumber: 83,
+      prHeadSha: "d".repeat(40),
       lastSessionId: "ses_worker_12345678",
       workspace: "/data/runs/issue-42/run-old",
       baseSha: "c".repeat(40),
@@ -78,6 +81,9 @@ test("loads legacy publication and merge state but persists only the simple run 
   assert.equal(store.get(42)?.lastSessionId, undefined);
   assert.equal(store.get(42)?.workspace, undefined);
   assert.equal(store.get(42)?.baseSha, undefined);
+  assert.equal("lastLogPath" in (store.get(42) as object), false);
+  assert.equal("prNumber" in (store.get(42) as object), false);
+  assert.equal("prHeadSha" in (store.get(42) as object), false);
   assert.equal(store.get(42)?.taskView?.status, "failed");
   assert.equal("publicationArtifact" in (store.get(42) as object), false);
   await store.set({ issueNumber: 43, branch: "opencode/issue-43-new", status: "running" });
@@ -138,7 +144,7 @@ test("serializes concurrent state writes into one valid snapshot", async (t) => 
   await assert.rejects(fs.access(path.join(dataDir, "state", "runs.json.tmp")));
 });
 
-test("persists parent, worker, pull request, and human reply state", async (t) => {
+test("persists parent, worker, pull request URL, and human reply state", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "issue-harness-state-fields-"));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
   const store = new StateStore(dataDir);
@@ -152,15 +158,13 @@ test("persists parent, worker, pull request, and human reply state", async (t) =
     lastSessionId: "ses_worker_12345678",
     workspace: "/opt/issue-harness/data/runs/issue-57/run-abc",
     baseSha: "a".repeat(40),
-    prNumber: 83,
     prUrl: "https://github.com/acme/service/pull/83",
-    prHeadSha: "b".repeat(40),
   });
 
   const reloaded = new StateStore(dataDir);
   await reloaded.load();
   assert.equal(reloaded.get(57)?.parentSessionId, "ses_parent_12345678");
-  assert.equal(reloaded.get(57)?.prNumber, 83);
+  assert.equal(reloaded.get(57)?.prUrl, "https://github.com/acme/service/pull/83");
 });
 
 test("rejects malformed durable state", async (t) => {

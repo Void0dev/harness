@@ -30,16 +30,15 @@ test("leaves normal chat untouched when no Issue is awaiting an answer", async (
   assert.deepEqual(result, { accepted: false });
 });
 
-test("fails open when Harness is unavailable so normal chat never hangs", async () => {
-  const result = await forwardHumanAnswer({
+test("rejects when Harness is unavailable so the background hook can report it", async () => {
+  await assert.rejects(forwardHumanAnswer({
     text: "What color is the page?",
     parentSessionId: "ses_parent_12345678",
     harnessUrl: "http://issue-harness:3000/commands/answers",
     commandToken: "command-secret",
     timeoutMs: 1,
     fetchImpl: async () => new Promise(() => {}),
-  });
-  assert.deepEqual(result, { accepted: false });
+  }), /timed out/);
 });
 
 test("ignores Harness progress updates and slash commands", async () => {
@@ -75,8 +74,8 @@ test("uses the loopback Harness proxy without exposing the command token to Open
   assert.deepEqual(result, { accepted: true, issueNumber: 57 });
 });
 
-test("fails open when Harness sends headers but never finishes its response body", async () => {
-  const result = await forwardHumanAnswer({
+test("rejects when Harness sends headers but never finishes its response body", async () => {
+  await assert.rejects(forwardHumanAnswer({
     text: "Use PostgreSQL",
     parentSessionId: "ses_parent_12345678",
     harnessUrl: "http://127.0.0.1:4098/commands/answers",
@@ -86,7 +85,5 @@ test("fails open when Harness sends headers but never finishes its response body
       status: 202,
       headers: { "content-type": "application/json" },
     }),
-  });
-
-  assert.deepEqual(result, { accepted: false });
+  }), /timed out/);
 });

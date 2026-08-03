@@ -408,9 +408,7 @@ async function handleAgentResult(
   await state.set(withTaskView({
     ...verifying,
     status: "finished",
-    prNumber: pullRequest.number,
     prUrl: pullRequest.url,
-    prHeadSha: pullRequest.headSha,
   }, issue, { status: "finished", prUrl: pullRequest.url, question: undefined }));
   try {
     await tracker.moveStatus(issue.number, "finished");
@@ -608,7 +606,9 @@ async function reconcilePersistedStates() {
               html_url: run.taskView?.issueUrl,
             }, { status: "failed", question: workerFailureQuestion(failure) });
           }
-        } catch {}
+        } catch (error) {
+          console.error("Persisted session failure recovery failed", error);
+        }
       }
       await state.set(reconciled);
       await tracker.markNeedsHuman(run.issueNumber);

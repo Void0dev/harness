@@ -3,40 +3,6 @@ import { readFileSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-const publicStatuses = {
-  "human-attention": {
-    schemaVersion: 1,
-    code: "agent_needs_input",
-    message: "The coding agent needs operator input. Review trusted local logs before resuming.",
-  },
-  "run-failed": {
-    schemaVersion: 1,
-    code: "agent_run_failed",
-    message: "The coding run failed. Review trusted local logs before resuming.",
-  },
-} as const;
-
-export function redactForGithub(value: string, configuredSecrets: Array<string | undefined>) {
-  let redacted = value;
-  for (const secret of configuredSecrets) {
-    if (secret && secret.length >= 6) {
-      redacted = redacted.split(secret).join("[REDACTED]");
-    }
-  }
-  return redacted
-    .replace(/\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}\b/g, "[REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED]")
-    .replace(/\bglpat-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED]")
-    .replace(/\bxox[baprs]-[A-Za-z0-9-]{20,}\b/g, "[REDACTED]")
-    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}\b/g, "[REDACTED]")
-    .replace(/\bAKIA[A-Z0-9]{16}\b/g, "[REDACTED]")
-    .replace(/((?:api[_-]?key|access[_-]?token|oauth[_-]?token|client[_-]?secret|password)\s*[:=]\s*)["']?[A-Za-z0-9_./+=-]{20,}["']?/gi, "$1[REDACTED]")
-    .replace(/(authorization:\s*(?:bearer|basic)\s+)[^\s]+/gi, "$1[REDACTED]");
-}
-export function publicHarnessStatus(kind: keyof typeof publicStatuses) {
-  return JSON.stringify(publicStatuses[kind]);
-}
-
 export async function ensurePrivateRuntimeDirectory(directory: string) {
   const expected = path.resolve(directory);
   await fs.mkdir(expected, { recursive: true, mode: 0o700 });

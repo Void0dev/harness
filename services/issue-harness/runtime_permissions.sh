@@ -8,10 +8,7 @@ harden_harness_runtime() {
 
   local data_dir="$1"
   local private_names=(
-    logs
     state
-    artifacts
-    publishers
   )
   local shared_names=(
     context

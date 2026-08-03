@@ -70,6 +70,59 @@ test("returns the persisted user message without waiting for GitHub", async () =
   assert.equal(outcome.messageID, "msg_user_12345678");
 });
 
+test("materializes a bounded failure when OpenCode persists malformed JSON", async () => {
+  let outcome;
+  let dispatches = 0;
+  const plan = nativeCommandPlan({
+    method: "POST",
+    pathname: "/session/ses_parent_12345678/command",
+    body: { command: "issue", arguments: "fix login", messageID: "msg_user_12345678" },
+  });
+
+  const persisted = { status: 200, body: Buffer.from("not-json") };
+  const result = await persistThenDispatch({
+    plan,
+    persist: async () => persisted,
+    dispatch: async () => { dispatches += 1; },
+    onOutcome: (value) => { outcome = value; },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result, persisted);
+  assert.equal(dispatches, 0);
+  assert.deepEqual(outcome, {
+    command: "issue",
+    commandText: "/issue fix login",
+    sessionID: "ses_parent_12345678",
+    messageID: "msg_user_12345678",
+    status: "failed",
+    failure: "opencode-persist-response-invalid",
+  });
+});
+
+test("reports a synchronous background dispatch failure without rejecting persistence", async () => {
+  const errors = [];
+  const plan = nativeCommandPlan({
+    method: "POST",
+    pathname: "/session/ses_parent_12345678/command",
+    body: { command: "issue", arguments: "fix login", messageID: "msg_user_12345678" },
+  });
+  const persisted = { status: 200, body: Buffer.from('{"info":{"id":"msg_user_12345678"}}') };
+
+  const result = await persistThenDispatch({
+    plan,
+    persist: async () => persisted,
+    dispatch: () => { throw new Error("dispatch failed"); },
+    onOutcome: () => {},
+    onError: (error) => errors.push(error),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result, persisted);
+  assert.equal(errors.length, 1);
+  assert.match(String(errors[0]), /dispatch failed/);
+});
+
 test("classifies accepted, busy, failed, and empty retry responses", () => {
   assert.deepEqual(harnessCommandOutcome("issue", {
     status: 201,

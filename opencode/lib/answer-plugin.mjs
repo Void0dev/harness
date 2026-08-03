@@ -10,8 +10,7 @@ export function createAnswerHooks({
         part.type === "text" && typeof part.text === "string" ? [part.text] : []).join("\n").trim();
       if (!text) return;
 
-      // Refresh stage in parallel so OpenCode can persist the optimistic user
-      // turn immediately and show its native thinking state without flicker.
+      // Forward in the background so OpenCode can persist the user turn immediately.
       void Promise.resolve().then(() => forward({
           text,
           parentSessionId: input.sessionID,

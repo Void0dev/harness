@@ -46,6 +46,8 @@ class InstallerCapabilityTest(unittest.TestCase):
             self.installer.REQUIRED_CAPABILITY_OUTCOMES,
         )
         self.assertEqual(normalized["https-route"], "provider:6")
+        self.assertIn("deployment-definition", normalized)
+        self.assertNotIn("artifact-materialization", normalized)
 
     def test_reports_all_missing_capability_outcomes_without_provider_assumptions(self):
         observed = self.capabilities()
@@ -256,6 +258,14 @@ class InstallerStateTest(unittest.TestCase):
             )
             self.assertNotIn("chat_password", payload)
             self.assertNotIn("pem", json.dumps(payload).lower().replace("github_app_pem", ""))
+
+    def test_rejects_removed_metadata_fields(self):
+        for field in ("artifact_digest", "diagnostics_ref", "release_status"):
+            with self.subTest(field=field):
+                state = self.state()
+                state["metadata"][field] = "obsolete"
+                with self.assertRaisesRegex(ValueError, "unexpected metadata fields"):
+                    self.installer.validate_state(state)
 
 
 if __name__ == "__main__":

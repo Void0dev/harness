@@ -127,6 +127,7 @@ function failureText(failure) {
     "issue-queue-check-failed": "Не удалось проверить очередь задач: Harness временно недоступен.",
     "github-issue-creation-failed": "GitHub не создал Issue: API вернул ошибку. Проверьте логи контейнера `issue-harness`.",
     "harness-unreachable": "Не удалось связаться с Harness: сервис недоступен или не ответил вовремя.",
+    "opencode-persist-response-invalid": "OpenCode сохранил команду, но вернул некорректный ответ. Повторите команду.",
   };
   if (typeof failure === "string" && /^harness-http-\d{3}$/.test(failure)) {
     return `Harness вернул HTTP ${failure.slice("harness-http-".length)} при создании Issue. Проверьте логи контейнера \`issue-harness\`.`;

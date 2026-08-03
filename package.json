@@ -7,7 +7,8 @@
     "build": "npm run build --workspaces",
     "lint": "npm run lint --workspaces",
     "typecheck": "npm run typecheck --workspaces",
-    "test": "npm run test --workspaces && npm run test:skills",
+    "test": "npm run test --workspaces && npm run test:opencode && npm run test:skills",
+    "test:opencode": "node --test opencode/test/*.test.mjs",
     "test:skills": "python3 -m unittest discover -s tests -p 'test_*.py'",
     "dev:harness": "npm run dev -w services/issue-harness"
   },

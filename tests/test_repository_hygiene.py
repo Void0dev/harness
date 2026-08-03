@@ -1,4 +1,3 @@
-import base64
 import pathlib
 import re
 import stat
@@ -95,13 +94,8 @@ class RepositoryHygieneTest(unittest.TestCase):
     def test_runtime_and_environment_secret_paths_are_ignored(self):
         runtime_paths = [
             ".harness/auth/github-token",
-            ".harness/logs/issue-1.log",
             ".harness/state/issues.json",
-            ".harness/sandboxes/issue-1/container.json",
-            ".harness/workspaces/issue-1/.git",
             ".harness/runs/issue-1.json",
-            ".harness/artifacts/issue-1.bundle",
-            ".harness/publishers/issue-1/lease.json",
             ".harness/docker-certs/key.pem",
             ".harness/locks/deploy.lock",
             ".omx/state/ultragoal.json",
@@ -126,7 +120,6 @@ class RepositoryHygieneTest(unittest.TestCase):
 
     def test_declarative_contract_remains_trackable(self):
         trackable_paths = [
-            ".harness/config.json",
             ".env.example",
             "services/example/.env.example",
         ]
@@ -140,13 +133,10 @@ class RepositoryHygieneTest(unittest.TestCase):
         result = git("ls-files", "-z")
         self.assertEqual(result.returncode, 0, result.stderr)
         tracked = [path for path in result.stdout.split("\0") if path]
-        allowed_harness = {
-            ".harness/config.json",
-        }
         forbidden = []
         for filename in tracked:
             path = pathlib.PurePosixPath(filename)
-            if filename.startswith(".harness/") and filename not in allowed_harness:
+            if filename.startswith(".harness/"):
                 forbidden.append(filename)
             if path.name == ".env" or (path.name.startswith(".env.") and path.name != ".env.example"):
                 forbidden.append(filename)
@@ -179,10 +169,7 @@ class RepositoryHygieneTest(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "Unix permission semantics are verified on Linux")
     def test_runtime_permissions_are_private(self):
         private_directories = [
-            "logs",
             "state",
-            "artifacts",
-            "publishers",
         ]
         shared_directories = [
             "runs",
@@ -224,34 +211,12 @@ class RepositoryHygieneTest(unittest.TestCase):
                     mode = stat.S_IMODE((data_dir / relative).stat().st_mode)
                     self.assertEqual(mode, 0o2770)
 
-    @unittest.skipIf(os.name == "nt", "Unix permission semantics are verified on Linux")
-    def test_base64_github_app_secret_becomes_private_temporary_file(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            secret_file = pathlib.Path(temporary) / "github-app.pem.b64"
-            secret_file.write_text(base64.b64encode(b"test-github-app-key\n").decode())
-            result = subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    (
-                        "source services/issue-harness/github_app_secret.sh; "
-                        "GITHUB_APP_PRIVATE_KEY_BASE64_PATH=\"$1\"; "
-                        "prepare_github_app_private_key; "
-                        "key_path=\"$GITHUB_APP_PRIVATE_KEY_PATH\"; "
-                        "test \"$(cat \"$key_path\")\" = test-github-app-key; "
-                        "test \"$(stat -c %a \"$key_path\")\" = 600; "
-                        "cleanup_github_app_private_key; "
-                        "test ! -e \"$key_path\""
-                    ),
-                    "github-app-secret-test",
-                    str(secret_file),
-                ],
-                cwd=ROOT,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
+    def test_obsolete_base64_github_app_secret_adapter_is_absent(self):
+        self.assertFalse((ROOT / "services/issue-harness/github_app_secret.sh").exists())
+        self.assertNotIn(
+            "GITHUB_APP_PRIVATE_KEY_BASE64_PATH",
+            (ROOT / "services/issue-harness/start.sh").read_text(),
+        )
     @unittest.skipIf(os.name == "nt", "Creating symlinks requires extra Windows privileges")
     def test_runtime_hardening_rejects_symlinked_runtime_directory(self):
         with tempfile.TemporaryDirectory() as temporary:

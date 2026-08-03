@@ -45,13 +45,37 @@ export async function persistThenDispatch({ plan, persist, dispatch, onOutcome, 
   try {
     const payload = JSON.parse(Buffer.from(persisted.body).toString("utf8"));
     messageID = payload?.info?.id;
-  } catch {}
-  if (!MESSAGE_ID.test(String(messageID ?? ""))) return persisted;
+  } catch (error) {
+    messageID = plan.promptBody?.messageID;
+    if (!MESSAGE_ID.test(String(messageID ?? ""))) {
+      onError(new Error("OpenCode persisted an invalid command response", { cause: error }));
+      return persisted;
+    }
+    emitOutcome(() => ({ status: "failed", failure: "opencode-persist-response-invalid" }));
+    return persisted;
+  }
+  if (!MESSAGE_ID.test(String(messageID ?? ""))) {
+    messageID = plan.promptBody?.messageID;
+    if (!MESSAGE_ID.test(String(messageID ?? ""))) {
+      onError(new Error("OpenCode persisted a command response without a valid message ID"));
+      return persisted;
+    }
+    emitOutcome(() => ({ status: "failed", failure: "opencode-persist-response-invalid" }));
+    return persisted;
+  }
 
-  void Promise.resolve().then(() => dispatch({ ...plan, messageID })).then((outcome) => {
-    return onOutcome({ ...outcome, command: plan.command, commandText: plan.commandText, sessionID: plan.sessionID, messageID });
-  }).catch(onError);
+  emitOutcome(() => dispatch({ ...plan, messageID }));
   return persisted;
+
+  function emitOutcome(resolveOutcome) {
+    void Promise.resolve().then(resolveOutcome).then((resolved) => onOutcome({
+      ...resolved,
+      command: plan.command,
+      commandText: plan.commandText,
+      sessionID: plan.sessionID,
+      messageID,
+    })).catch(onError);
+  }
 }
 
 export function harnessCommandOutcome(command, response) {

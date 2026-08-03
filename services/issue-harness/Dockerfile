@@ -11,9 +11,6 @@ RUN apt-get update \
   && useradd -m -u 10001 -g 20001 agent \
   && install -d -o agent -g harness-shared -m 0700 \
     /opt/issue-harness/data \
-    /opt/issue-harness/data/artifacts \
-    /opt/issue-harness/data/logs \
-    /opt/issue-harness/data/publishers \
     /opt/issue-harness/data/state \
   && install -d -o agent -g harness-shared -m 2770 \
     /opt/issue-harness/data/context \

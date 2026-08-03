@@ -15,9 +15,3 @@ export function parseIssueModelId(body: string | null | undefined, fallback = DE
   const value = match?.[1];
   return value && MODEL_ID.test(value) ? value : fallback;
 }
-
-export function parseIssueProviderId(body: string | null | undefined, fallback = "void") {
-  if (!parseParentSessionId(body)) return fallback;
-  const value = body?.match(/<!--\s*opencode-harness-provider:\s*([^\s]+)\s*-->/i)?.[1];
-  return value && /^(void|void-image|void-video)$/.test(value) ? value : fallback;
-}

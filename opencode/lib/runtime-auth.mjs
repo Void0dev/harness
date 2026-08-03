@@ -1,19 +1,12 @@
-import { cookieValue, credentialsMatch, parseSessionCookie } from "../auth.mjs";
+import { timingSafeEqual } from "node:crypto";
 
 export function runtimeRequestAuthorized({
-  runtimeMode,
   authorization,
-  cookieHeader,
   internalToken,
-  expectedUsername,
-  sessionSecret,
-  now,
 }) {
-  if (
-    authorization?.startsWith("Bearer ")
-    && credentialsMatch("internal", authorization.slice(7), "internal", internalToken)
-  ) return true;
-  if (runtimeMode || !expectedUsername || !sessionSecret) return false;
-  const session = parseSessionCookie(cookieValue(cookieHeader), { secret: sessionSecret, now });
-  return session?.username === expectedUsername;
+  const actual = authorization?.startsWith("Bearer ") ? authorization.slice(7) : "";
+  if (typeof internalToken !== "string") return false;
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(internalToken);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }

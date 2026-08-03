@@ -22,7 +22,7 @@ ai:backlog -> ai:todo -> ai:running -> ai:finished
 - `HEALTH_PORT=3000`
 - optional 32+ character `HARNESS_HEALTH_DETAILS_TOKEN`
 
-Both services receive the same repository-scoped GitHub App ID, Installation ID, owner, repository, base branch, and read-only PEM mount. The public Harness additionally receives login credentials and a 32+ character session-signing secret. The private `opencode-runtime` receives `VOID_AI_BASE_URL`, `VOID_AI_API_KEY`, `VOID_AI_MODEL_ID`, and the OpenCode SQLite volume. Harness must never receive the model API key; the runtime must never receive web credentials or the session-signing secret.
+Both services receive the same repository-scoped GitHub App ID, Installation ID, owner, repository, base branch, and read-only PEM mount. The public Harness additionally receives login credentials and a 32+ character session-signing secret. The private `opencode-runtime` receives `VOID_AI_BASE_URL`, `VOID_AI_API_KEY`, and the OpenCode SQLite volume. Harness must never receive the model API key; the runtime must never receive web credentials or the session-signing secret.
 
 ## OpenCode sessions and project workspace
 
@@ -44,7 +44,7 @@ Both services receive the same repository-scoped GitHub App ID, Installation ID,
 - The Void gateway key enters only `opencode-runtime`.
 - The browser never receives `HARNESS_COMMAND_TOKEN` or `OPENCODE_INTERNAL_TOKEN`.
 - OpenCode plugins reach privileged Harness commands through a loopback-only web proxy; the proxy adds the real command token server-side.
-- Target Coolify credentials never enter Harness coding sessions.
+- Server and deployment credentials never enter Harness coding sessions.
 - The coding agent works in the isolated checkout, creates its own commit, pushes `opencode/issue-*` with `harness-github git`, and creates or reuses a draft PR into `stage` with `harness-github gh`.
 - Normal Issue processing always stops at that draft PR. Authenticated `/merge stage`, `/merge stage #<issue>`, or `/merge prod` runs as an ordinary command prompt in the same standard OpenCode `build` agent, which reads current GitHub state and performs the requested operation with `gh`. Production is always a `stage -> main` pull request.
 - Agent configuration does not prevent GitHub operations. Release App permissions and GitHub rulesets are the authority for allowed push and merge actions.

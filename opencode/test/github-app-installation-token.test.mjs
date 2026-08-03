@@ -10,19 +10,19 @@ function decodeJson(value) {
   return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
 }
 
-async function tokenFromKeyFile(t, { base64 }) {
+async function tokenFromKeyFile(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "github-app-token-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
-  const keyPath = path.join(root, base64 ? "github-app.pem.b64" : "github-app.pem");
-  await fs.writeFile(keyPath, base64 ? Buffer.from(privateKeyPem).toString("base64") : privateKeyPem);
+  const keyPath = path.join(root, "github-app.pem");
+  await fs.writeFile(keyPath, privateKeyPem);
   const requests = [];
   const token = await githubAppInstallationToken({
     env: {
       GITHUB_APP_ID: "12345",
       GITHUB_APP_INSTALLATION_ID: "67890",
-      [base64 ? "GITHUB_APP_PRIVATE_KEY_BASE64_PATH" : "GITHUB_APP_PRIVATE_KEY_PATH"]: keyPath,
+      GITHUB_APP_PRIVATE_KEY_PATH: keyPath,
     },
     now: () => Date.parse("2026-08-03T12:00:00Z"),
     fetchImpl: async (url, options) => {
@@ -58,14 +58,10 @@ async function tokenFromKeyFile(t, { base64 }) {
 }
 
 test("creates an installation token from a raw private key file", async (t) => {
-  await tokenFromKeyFile(t, { base64: false });
+  await tokenFromKeyFile(t);
 });
 
-test("creates an installation token from a base64 private key file", async (t) => {
-  await tokenFromKeyFile(t, { base64: true });
-});
-
-test("falls back to the base64 key when the configured raw key file is absent", async (t) => {
+test("rejects obsolete base64-only GitHub App credentials", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "github-app-token-fallback-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -73,21 +69,14 @@ test("falls back to the base64 key when the configured raw key file is absent", 
   const base64Path = path.join(root, "github-app.pem.b64");
   await fs.writeFile(base64Path, Buffer.from(privateKeyPem).toString("base64"));
 
-  const token = await githubAppInstallationToken({
+  await assert.rejects(githubAppInstallationToken({
     env: {
       GITHUB_APP_ID: "12345",
       GITHUB_APP_INSTALLATION_ID: "67890",
-      GITHUB_APP_PRIVATE_KEY_PATH: path.join(root, "missing.pem"),
       GITHUB_APP_PRIVATE_KEY_BASE64_PATH: base64Path,
     },
-    fetchImpl: async () => ({
-      ok: true,
-      status: 201,
-      async json() { return { token: "ghs_fallback" }; },
-    }),
-  });
-
-  assert.equal(token, "ghs_fallback");
+    fetchImpl: async () => { throw new Error("must not fetch"); },
+  }), /GITHUB_APP_PRIVATE_KEY_PATH/);
 });
 
 test("rejects missing GitHub App credentials before making a request", async () => {

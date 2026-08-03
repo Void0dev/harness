@@ -34,7 +34,7 @@ Codex в runtime не используется. Один standard `build` agent 
 
 - `$HARNESS_DATA_DIR/context` — persistent writable project workspace. При первом запуске Harness клонирует `stage`; при следующих стартах fast-forward выполняется только для чистой `stage`, а локальная ветка и незакоммиченные изменения сохраняются.
 - `$HARNESS_DATA_DIR/opencode` — постоянная история OpenCode-сессий.
-- `$HARNESS_DATA_DIR/workspaces` и `$HARNESS_DATA_DIR/runs` — временные рабочие копии и данные запусков.
+- `$HARNESS_DATA_DIR/runs` — временные рабочие копии и данные запусков.
 - GitHub — Issues, ветки и pull requests.
 
 Для каждого Issue создаётся отдельный временный клон, поэтому автоматическая Issue-работа не вмешивается в основной project workspace. После push и создания PR источником истины для Issue flow снова остаётся GitHub.
@@ -45,7 +45,7 @@ Codex в runtime не используется. Один standard `build` agent 
 | --- | --- |
 | [`deploy-opencode-harness`](skills/deploy-opencode-harness/SKILL.md) | Обнаруживает доступный способ развёртывания, настраивает Release App и rulesets, устанавливает два сервиса и проверяет результат. |
 
-Coolify не обязателен для локального теста. В production размещается только Harness stack из двух сервисов; skill не читает, не меняет и не деплоит целевое приложение.
+В production размещается только Harness stack из двух сервисов; skill адаптирует каноническую topology к доступному deployment mechanism и не читает, не меняет и не деплоит целевое приложение.
 
 ## Основные компоненты
 

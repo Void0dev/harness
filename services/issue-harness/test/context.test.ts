@@ -80,6 +80,48 @@ test("preserves local project workspace changes instead of resetting them", asyn
   assert.equal(refreshed.updated, false);
 });
 
+test("surfaces a fast-forward failure after the ancestry check succeeds", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-context-merge-failure-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const source = path.join(root, "source");
+  const remote = path.join(root, "remote.git");
+  const contextDir = path.join(root, "context");
+
+  await git(root, "init", "--bare", remote);
+  await fs.mkdir(source);
+  await git(source, "init", "-b", "stage");
+  await git(source, "config", "user.name", "Test");
+  await git(source, "config", "user.email", "test@example.test");
+  await fs.writeFile(path.join(source, "version.txt"), "one\n");
+  await git(source, "add", "version.txt");
+  await git(source, "commit", "-m", "initial");
+  await git(source, "remote", "add", "origin", remote);
+  await git(source, "push", "-u", "origin", "stage");
+  await prepareProjectWorkspace({ contextDir, remoteUrl: remote, baseBranch: "stage" });
+
+  await fs.writeFile(path.join(source, "version.txt"), "two\n");
+  await git(source, "add", "version.txt");
+  await git(source, "commit", "-m", "update");
+  await git(source, "push", "origin", "stage");
+
+  const realGit = (await execFileAsync("which", ["git"], { encoding: "utf8" })).stdout.trim();
+  const fakeBin = path.join(root, "fake-bin");
+  await fs.mkdir(fakeBin);
+  await fs.writeFile(path.join(fakeBin, "git"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = merge ] && [ \"$2\" = --ff-only ]; then exit 1; fi",
+    `exec ${JSON.stringify(realGit)} \"$@\"`,
+    "",
+  ].join("\n"), { mode: 0o755 });
+
+  await assert.rejects(prepareProjectWorkspace({
+    contextDir,
+    remoteUrl: remote,
+    baseBranch: "stage",
+    gitEnv: { PATH: `${fakeBin}:${process.env.PATH}` },
+  }));
+});
+
 test("migrates the legacy clean detached stage checkout to a writable stage branch", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-legacy-context-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

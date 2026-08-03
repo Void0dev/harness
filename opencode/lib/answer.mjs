@@ -41,13 +41,11 @@ export async function forwardHumanAnswer({
       })(),
       new Promise((_, reject) => {
         timer = setTimeout(() => {
-          controller.abort();
           reject(new Error("Harness answer forwarding timed out"));
+          controller.abort();
         }, timeoutMs);
       }),
     ]);
-  } catch {
-    return { accepted: false };
   } finally {
     clearTimeout(timer);
   }

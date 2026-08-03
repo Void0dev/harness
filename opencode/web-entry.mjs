@@ -19,36 +19,18 @@ import {
   taskCompletionEvents,
   terminalSessionIdleEvent,
 } from "./lib/native-events.mjs";
-import {
-  SESSION_COOKIE,
-  cookieValue,
-  createSessionCookie,
-  credentialsMatch,
-  loginPage,
-  parseSessionCookie,
-  safeNextPath,
-} from "./auth.mjs";
 
-const runtimeMode = process.env.OPENCODE_RUNTIME_MODE === "private";
 const publicPort = Number.parseInt(process.env.OPENCODE_RUNTIME_PORT ?? process.env.OPENCODE_WEB_PORT ?? "4096", 10);
 const upstreamPort = Number.parseInt(process.env.OPENCODE_UPSTREAM_PORT ?? "4097", 10);
 const internalHarnessPort = Number.parseInt(process.env.OPENCODE_HARNESS_PROXY_PORT ?? "4098", 10);
 const projectDirectory = process.env.OPENCODE_PROJECT_DIR ?? "/home/opencode/workspace";
 const opencodeDatabasePath = process.env.OPENCODE_DATABASE_PATH ?? "/home/opencode/.local/share/opencode/opencode.db";
-const expectedUsername = process.env.OPENCODE_SERVER_USERNAME ?? "opencode";
-const expectedPassword = process.env.OPENCODE_SERVER_PASSWORD;
-const sessionSecret = process.env.OPENCODE_SESSION_SECRET;
 const internalToken = process.env.OPENCODE_INTERNAL_TOKEN;
 const harnessCommandToken = process.env.HARNESS_COMMAND_TOKEN;
 const harnessCommandUrl = validatedHarnessUrl(process.env.HARNESS_COMMAND_URL ?? "", "Harness command URL");
 const harnessAnswerUrl = validatedHarnessUrl(process.env.HARNESS_ANSWER_URL ?? "", "Harness answer URL");
 const harnessRetryUrl = new URL("/commands/retries", harnessCommandUrl);
 const harnessTasksUrl = process.env.HARNESS_TASKS_URL;
-const sessionTtlSeconds = Number.parseInt(process.env.OPENCODE_SESSION_TTL_SECONDS ?? "86400", 10);
-if (!runtimeMode && !expectedPassword) throw new Error("OPENCODE_SERVER_PASSWORD is required");
-if (!runtimeMode && (!sessionSecret || sessionSecret.length < 32)) {
-  throw new Error("OPENCODE_SESSION_SECRET must contain at least 32 characters");
-}
 if (!internalToken || internalToken.length < 32) throw new Error("OPENCODE_INTERNAL_TOKEN must contain at least 32 characters");
 if (!harnessCommandToken || harnessCommandToken.length < 32 || /\s/.test(harnessCommandToken)) {
   throw new Error("HARNESS_COMMAND_TOKEN must contain at least 32 non-whitespace characters");
@@ -60,19 +42,12 @@ const parsedHarnessTasksUrl = new URL(harnessTasksUrl ?? "");
 if (!["http:", "https:"].includes(parsedHarnessTasksUrl.protocol) || parsedHarnessTasksUrl.username || parsedHarnessTasksUrl.password) {
   throw new Error("HARNESS_TASKS_URL must be a plain HTTP(S) URL");
 }
-if (!Number.isSafeInteger(sessionTtlSeconds) || sessionTtlSeconds < 86_400 || sessionTtlSeconds > 2_592_000) {
-  throw new Error("OPENCODE_SESSION_TTL_SECONDS must be between 86400 and 2592000");
-}
-
 const encodedProject = Buffer.from(projectDirectory, "utf8").toString("base64url");
 const projectRoute = `/${encodedProject}/session`;
 const upstreamEnvironment = { ...process.env, BROWSER: "/bin/true" };
 upstreamEnvironment.HARNESS_COMMAND_URL = `http://127.0.0.1:${internalHarnessPort}/commands/issues`;
 upstreamEnvironment.HARNESS_ANSWER_URL = `http://127.0.0.1:${internalHarnessPort}/commands/answers`;
 upstreamEnvironment.HARNESS_RETRY_URL = `http://127.0.0.1:${internalHarnessPort}/commands/retries`;
-delete upstreamEnvironment.OPENCODE_SERVER_USERNAME;
-delete upstreamEnvironment.OPENCODE_SERVER_PASSWORD;
-delete upstreamEnvironment.OPENCODE_SESSION_SECRET;
 delete upstreamEnvironment.OPENCODE_INTERNAL_TOKEN;
 delete upstreamEnvironment.HARNESS_COMMAND_TOKEN;
 delete upstreamEnvironment.HARNESS_TASKS_URL;
@@ -96,66 +71,11 @@ const opencode = spawn("opencode", ["serve", "--hostname", "127.0.0.1", "--port"
 opencode.on("error", (error) => { console.error("Failed to start OpenCode Web", error); process.exit(1); });
 opencode.on("exit", (code, signal) => { if (signal) process.kill(process.pid, signal); else process.exit(code ?? 1); });
 
-const failures = new Map();
-const loginWindowMs = 15 * 60 * 1000;
-const maxLoginFailures = 5;
-
-function securityHeaders(response) {
-  response.setHeader("cache-control", "no-store");
-  response.setHeader("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
-  response.setHeader("referrer-policy", "no-referrer");
-  response.setHeader("x-content-type-options", "nosniff");
-  response.setHeader("x-frame-options", "DENY");
-}
-
 function authorized(request) {
   return runtimeRequestAuthorized({
-    runtimeMode,
     authorization: request.headers.authorization,
-    cookieHeader: request.headers.cookie,
     internalToken,
-    expectedUsername,
-    sessionSecret,
   });
-}
-
-function secureRequest(request) {
-  const forwarded = String(request.headers["x-forwarded-proto"] ?? "").split(",")[0].trim();
-  return forwarded === "https" || Boolean(request.socket.encrypted);
-}
-
-function loginKey(request) {
-  return request.socket.remoteAddress ?? "unknown";
-}
-
-function limited(key) {
-  const record = failures.get(key);
-  if (!record || record.resetAt <= Date.now()) { failures.delete(key); return false; }
-  return record.count >= maxLoginFailures;
-}
-
-function recordFailure(key) {
-  const current = failures.get(key);
-  failures.set(key, current && current.resetAt > Date.now()
-    ? { count: current.count + 1, resetAt: current.resetAt }
-    : { count: 1, resetAt: Date.now() + loginWindowMs });
-}
-
-async function formBody(request) {
-  const chunks = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    bytes += chunk.length;
-    if (bytes > 8192) throw new Error("Login form is too large");
-    chunks.push(chunk);
-  }
-  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
-}
-
-function showLogin(response, options = {}, status = 200) {
-  securityHeaders(response);
-  response.writeHead(status, { "content-type": "text/html; charset=utf-8" });
-  response.end(loginPage(options));
 }
 
 function proxyHeaders(headers) {
@@ -466,51 +386,13 @@ async function proxySessionMetadata(requestUrl, response) {
 
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://opencode.local");
-  if (runtimeMode && !authorized(request)) {
+  if (!authorized(request)) {
     response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
     response.end('{"error":"unauthorized"}');
     return;
   }
-  if (runtimeMode && ["/login", "/logout"].includes(url.pathname)) {
+  if (["/login", "/logout"].includes(url.pathname)) {
     response.writeHead(404).end();
-    return;
-  }
-  if (request.method === "GET" && url.pathname === "/login") {
-    if (authorized(request)) { response.writeHead(303, { location: safeNextPath(url.searchParams.get("next")) }); response.end(); return; }
-    showLogin(response, { next: safeNextPath(url.searchParams.get("next")) });
-    return;
-  }
-  if (request.method === "POST" && url.pathname === "/login") {
-    try {
-      const form = await formBody(request);
-      const username = form.get("username") ?? "";
-      const password = form.get("password") ?? "";
-      const next = safeNextPath(form.get("next"));
-      const key = loginKey(request);
-      if (limited(key)) { showLogin(response, { next, limited: true }, 429); return; }
-      if (!credentialsMatch(username, password, expectedUsername, expectedPassword)) {
-        recordFailure(key);
-        showLogin(response, { next, invalid: true }, 401);
-        return;
-      }
-      failures.delete(key);
-      const session = createSessionCookie({ username, secret: sessionSecret, ttlSeconds: sessionTtlSeconds, secure: secureRequest(request) });
-      response.writeHead(303, { location: next, "set-cookie": session.header, "cache-control": "no-store" });
-      response.end();
-    } catch {
-      showLogin(response, { invalid: true }, 400);
-    }
-    return;
-  }
-  if (request.method === "POST" && url.pathname === "/logout") {
-    response.writeHead(303, { location: "/login", "set-cookie": `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`, "cache-control": "no-store" });
-    response.end();
-    return;
-  }
-  if (!authorized(request)) {
-    if (request.headers.authorization?.startsWith("Bearer ")) { response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" }); response.end('{"error":"unauthorized"}'); return; }
-    response.writeHead(303, { location: `/login?next=${encodeURIComponent(safeNextPath(request.url))}`, "cache-control": "no-store" });
-    response.end();
     return;
   }
   if (request.method === "GET" && url.pathname === "/__harness/task-card.mjs") {
@@ -558,8 +440,7 @@ server.on("upgrade", (request, socket, head) => {
 });
 
 server.listen(publicPort, "0.0.0.0", () => {
-  const role = runtimeMode ? "Private OpenCode runtime" : "OpenCode project UI";
-  console.log(`${role}: http://localhost:${publicPort}${projectRoute}`);
+  console.log(`Private OpenCode runtime: http://localhost:${publicPort}${projectRoute}`);
 });
 function shutdown(signal) {
   harnessProxyServer.close();

@@ -6,43 +6,8 @@ import test from "node:test";
 import {
   acquireProcessLock,
   ensureRuntimeIdentity,
-  redactForGithub,
-  publicHarnessStatus,
   ensurePrivateRuntimeDirectory,
 } from "../src/security.js";
-
-test("redacts configured credentials and common token formats", () => {
-  const output = redactForGithub(
-    [
-      "token=literal-secret",
-      `ghp_${"abcdefghijklmnopqrstuvwxyz123456"}`,
-      `sk-proj-${"abcdefghijklmnopqrstuvwxyz"}`,
-      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.aGVsbG93b3JsZHNpZ25hdHVyZQ",
-      `oauth_token=${["xoxb", "123456789012", "123456789012", "abcdefghijklmnopqrstuvwx"].join("-")}`,
-      "api_key=abcdefghijklmnopqrstuvwxyz123456",
-    ].join(" "),
-    ["literal-secret"],
-  );
-
-  assert.equal(output.includes("literal-secret"), false);
-  assert.equal(output.includes("ghp_"), false);
-  assert.equal(output.includes("sk-proj-"), false);
-  assert.equal(output.includes("eyJhbGci"), false);
-  assert.equal(output.includes("xoxb-"), false);
-  assert.equal(output.includes("abcdefghijklmnopqrstuvwxyz123456"), false);
-  assert.match(output, /\[REDACTED\]/);
-});
-
-test("maps untrusted details to a bounded generic status", () => {
-  const status = publicHarnessStatus("human-attention");
-  assert.deepEqual(JSON.parse(status), {
-    schemaVersion: 1,
-    code: "agent_needs_input",
-    message: "The coding agent needs operator input. Review trusted local logs before resuming.",
-  });
-  assert.equal(status.length < 512, true);
-  assert.doesNotMatch(status, /raw attacker detail/i);
-});
 
 test("creates and repairs agent runtime directories with owner-only permissions", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "harness-runtime-permissions-"));
