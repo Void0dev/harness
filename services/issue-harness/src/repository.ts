@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { ensurePrivateRuntimeDirectory } from "./security.js";
+import { ensureSharedRuntimeParentDirectory } from "./security.js";
 
 const execFileAsync = promisify(execFile);
 const githubName = /^[A-Za-z0-9_.-]+$/;
@@ -46,8 +46,8 @@ export async function prepareIsolatedExecutionWorkspace(
   assertSafeName("base branch", options.baseBranch);
 
   const runsRoot = path.resolve(options.dataDir, "runs", `issue-${options.issueNumber}`);
-  await ensurePrivateRuntimeDirectory(path.resolve(options.dataDir, "runs"));
-  await ensurePrivateRuntimeDirectory(runsRoot);
+  await ensureSharedRuntimeParentDirectory(path.resolve(options.dataDir, "runs"));
+  await ensureSharedRuntimeParentDirectory(runsRoot);
   const workspace = await fs.mkdtemp(path.join(runsRoot, "run-"));
   await isolatedGit(
     path.dirname(workspace),
@@ -67,6 +67,7 @@ export async function prepareIsolatedExecutionWorkspace(
   await isolatedGit(workspace, undefined, "config", "user.name", "OpenCode Harness");
   await isolatedGit(workspace, undefined, "config", "user.email", "opencode-harness@users.noreply.github.com");
   const baseSha = await isolatedGit(workspace, undefined, "rev-parse", "HEAD");
+  await fs.chmod(workspace, 0o2770);
   return { workspace, baseSha };
 }
 
@@ -106,7 +107,14 @@ function assertSafeName(label: string, value: string) {
 }
 
 async function isolatedGit(cwd: string, gitEnv: NodeJS.ProcessEnv | undefined, ...args: string[]) {
-  const result = await execFileAsync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+  const result = await execFileAsync("git", [
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "core.fsmonitor=false",
+    "-c", "diff.external=",
+    "-c", "credential.helper=",
+    "-c", "protocol.ext.allow=never",
+    ...args,
+  ], {
     cwd,
     env: {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -119,6 +127,8 @@ async function isolatedGit(cwd: string, gitEnv: NodeJS.ProcessEnv | undefined, .
       LC_ALL: "C",
       ...allowlistedGitAuthEnvironment(gitEnv),
     },
+    timeout: 30_000,
+    killSignal: "SIGKILL",
     maxBuffer: 10 * 1024 * 1024,
   });
   return result.stdout.trim();

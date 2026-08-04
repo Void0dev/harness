@@ -171,13 +171,11 @@ class RepositoryHygieneTest(unittest.TestCase):
         private_directories = [
             "state",
         ]
-        shared_directories = [
-            "runs",
-            "context",
-        ]
+        shared_writable_directories = ["context"]
+        shared_parent_directories = ["runs"]
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = pathlib.Path(temporary) / "repository"
-            for relative in private_directories + shared_directories:
+            for relative in private_directories + shared_writable_directories + shared_parent_directories:
                 directory = data_dir / relative
                 directory.mkdir(parents=True, mode=0o755)
                 directory.chmod(0o755)
@@ -206,10 +204,15 @@ class RepositoryHygieneTest(unittest.TestCase):
                     mode = stat.S_IMODE((data_dir / relative).stat().st_mode)
                     self.assertEqual(mode, 0o700)
 
-            for relative in shared_directories:
+            for relative in shared_writable_directories:
                 with self.subTest(shared_directory=relative):
                     mode = stat.S_IMODE((data_dir / relative).stat().st_mode)
                     self.assertEqual(mode, 0o2770)
+
+            for relative in shared_parent_directories:
+                with self.subTest(shared_parent_directory=relative):
+                    mode = stat.S_IMODE((data_dir / relative).stat().st_mode)
+                    self.assertEqual(mode, 0o2750)
 
     def test_obsolete_base64_github_app_secret_adapter_is_absent(self):
         self.assertFalse((ROOT / "services/issue-harness/github_app_secret.sh").exists())

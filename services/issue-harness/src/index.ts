@@ -11,6 +11,7 @@ import {
   type AgentRunResult,
 } from "./runner.js";
 import {
+  branchHead,
   githubGitAuthEnv,
   githubRepositoryRemote,
   prepareIsolatedExecutionWorkspace,
@@ -26,11 +27,12 @@ import { parseIssueModelId, parseParentSessionId } from "./opencode.js";
 import { prepareProjectWorkspace as prepareWorkspaceCheckout } from "./context.js";
 import { OpenCodeClient } from "./opencode-client.js";
 import { retryTransient } from "./retry.js";
-import { cleanupExpiredWorkspaces } from "./retention.js";
+import { cleanupExpiredWorkspaces, cleanupPrunedFinishedWorkspaces } from "./retention.js";
 import { appendObservedStage, stageFromMessageParts } from "./progress.js";
 import { workerFailureQuestion } from "./worker-error.js";
 import { acceptsHumanAnswer, acceptsTechnicalRetry, sanitizeTaskView, taskViewsForParent, technicalRetryTransition, workerSessionDirectory, type TaskStatus, type TaskView } from "./task-view.js";
 import { evaluateHumanCommentWindow } from "./human-comments.js";
+import { HarnessRuntime } from "./runtime.js";
 import { startPublicGateway } from "../../../opencode/lib/public-gateway.mjs";
 
 const state = new StateStore(config.dataDir);
@@ -57,6 +59,7 @@ const scheduler = new RunScheduler<NonNullable<Awaited<ReturnType<GithubTracker[
   config.maxConcurrentRuns,
   (issue) => issue.number,
 );
+const runtime = new HarnessRuntime();
 let lastSuccessfulPollAt: number | null = null;
 let lastWorkerHeartbeatAt: number | null = null;
 let pollState: "waiting" | "polling" = "waiting";
@@ -107,7 +110,9 @@ async function prepareProjectWorkspace() {
 
 async function tick() {
   if (workspaceCleanupInProgress) return;
+  lastWorkerHeartbeatAt = Date.now();
   await reconcileHumanCommentReplies();
+  lastWorkerHeartbeatAt = Date.now();
   await scheduler.poll(
     async () => {
       pollState = "polling";
@@ -121,10 +126,12 @@ async function tick() {
     },
     async (issue) => {
       runState = "running";
+      lastWorkerHeartbeatAt = Date.now();
       try {
         await processIssue(issue);
       } finally {
         runState = "idle";
+        lastWorkerHeartbeatAt = Date.now();
       }
     },
   );
@@ -135,10 +142,14 @@ async function cleanupWorkspaceStorage(options: { onlyWhenIdle?: boolean } = {})
   if (options.onlyWhenIdle && (pollState !== "waiting" || runState !== "idle")) return;
   workspaceCleanupInProgress = true;
   try {
+    const states = state.all();
     await cleanupExpiredWorkspaces({
       dataDir: config.dataDir,
-      states: state.all(),
+      states,
       retentionMs: config.workspaceRetentionMs,
+    });
+    await state.pruneFinished(500, async (pruned) => {
+      await cleanupPrunedFinishedWorkspaces({ dataDir: config.dataDir, states: pruned });
     });
   } catch (error) {
     console.error("Workspace cleanup failed", error);
@@ -181,6 +192,14 @@ async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker[
   const action = nextRunAction(existing);
   if (action === "finalize") {
     await tracker.moveStatus(issue.number, "finished");
+    return;
+  }
+  if (action === "wait" && existing) {
+    await synchronizeWaitingIssue(issue, existing);
+    return;
+  }
+  if (action === "reconcile-publication" && existing) {
+    await reconcilePublication(issue, existing);
     return;
   }
 
@@ -268,11 +287,14 @@ async function startCoding(
       sessionId: started.sessionId,
       prompt: started.prompt,
       client,
+      signal: runtime.signal,
       onProgress: async (parts) => {
+        lastWorkerHeartbeatAt = Date.now();
         const observed = stageFromMessageParts(parts);
         if (!observed) return;
         const current = state.get(issue.number);
         if (!current) return;
+        if (current.taskView?.stages.includes(observed)) return;
         await state.set(withTaskView(withoutTimestamp(current), issue, {
           status: "running",
           stages: appendObservedStage(current.taskView?.stages ?? ["accepted"], observed),
@@ -326,11 +348,14 @@ async function resumeCoding(
       sessionId: lastSessionId,
       humanReply: pendingHumanReply,
       client,
+      signal: runtime.signal,
       onProgress: async (parts) => {
+        lastWorkerHeartbeatAt = Date.now();
         const observed = stageFromMessageParts(parts);
         if (!observed) return;
         const current = state.get(issue.number);
         if (!current) return;
+        if (current.taskView?.stages.includes(observed)) return;
         await state.set(withTaskView(withoutTimestamp(current), issue, {
           status: "running",
           question: undefined,
@@ -346,6 +371,76 @@ async function resumeCoding(
       status: "awaiting_human",
       awaitingAction: "resume_child",
     }, "Не удалось продолжить рабочую сессию. Проверьте OpenCode и отправьте /retry в этом чате.", "failed");
+  }
+}
+
+async function reconcilePublication(
+  issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>,
+  run: IssueRunState,
+) {
+  if (!run.workspace) {
+    await waitForHuman(issue, {
+      ...withoutTimestamp(run),
+      status: "awaiting_human",
+      awaitingAction: "rerun",
+    }, "Harness не смог восстановить рабочую копию для проверки draft PR. Отправьте /retry в этом чате.", "failed");
+    return;
+  }
+  let pullRequest;
+  try {
+    const headSha = await branchHead(run.workspace, run.branch);
+    pullRequest = await retryTransient(async () => {
+      const found = await tracker.findHarnessPullRequest(issue.number, run.branch);
+      if (!found) throw new Error("The expected draft pull request is not visible yet");
+      assertDraftPullRequestMatchesRun({
+        pullRequest: found,
+        branch: run.branch,
+        headSha,
+        baseBranch: config.baseBranch,
+      });
+      return found;
+    }, { attempts: 3, delayMs: 1_000 });
+  } catch (error) {
+    console.error("Persisted pull request reconciliation failed", error);
+    await waitForHuman(issue, {
+      ...withoutTimestamp(run),
+      status: "awaiting_human",
+      awaitingAction: run.lastSessionId && run.workspace && run.baseSha ? "resume_child" : "rerun",
+    }, "Harness не смог подтвердить draft PR после перезапуска. Проверьте GitHub и отправьте /retry в этом чате.", "failed");
+    return;
+  }
+  await state.set(withTaskView({
+    ...withoutTimestamp(run),
+    status: "finished",
+    prUrl: pullRequest.url,
+  }, issue, { status: "finished", prUrl: pullRequest.url, question: undefined }));
+  try {
+    await tracker.moveStatus(issue.number, "finished");
+    await tracker.comment(issue.number, `Finished. Pull request: ${pullRequest.url}`);
+  } catch (error) {
+    console.error("Reconciled Issue synchronization failed", error);
+  }
+  await cleanupWorkspaceStorage();
+}
+
+async function synchronizeWaitingIssue(
+  issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>,
+  run: IssueRunState,
+) {
+  if (run.status !== "awaiting_human") return;
+  await synchronizePersistedAttention(issue.number, run);
+}
+
+async function synchronizePersistedAttention(issueNumber: number, run: IssueRunState) {
+  const question = run.taskView?.question;
+  if (!question) {
+    await tracker.markNeedsHuman(issueNumber);
+    return;
+  }
+  const comment = await tracker.ensureHumanQuestion(issueNumber, question);
+  const current = state.get(issueNumber);
+  if (current && acceptsHumanAnswer(current) && !current.humanQuestionCommentId) {
+    await state.set({ ...withoutTimestamp(current), humanQuestionCommentId: comment.id });
   }
 }
 
@@ -468,7 +563,7 @@ async function waitForHuman(
     issue,
     { status: cardStatus, question },
   ));
-  const questionComment = await tracker.needsHuman(issue.number, question);
+  const questionComment = await tracker.ensureHumanQuestion(issue.number, question);
   if (cardStatus !== "awaiting_human") return;
   const current = state.get(issue.number);
   if (
@@ -611,10 +706,31 @@ async function reconcilePersistedStates() {
         }
       }
       await state.set(reconciled);
-      await tracker.markNeedsHuman(run.issueNumber);
+      await synchronizePersistedAttention(run.issueNumber, state.get(run.issueNumber)!);
       continue;
     }
-    await tracker.moveStatus(run.issueNumber, "running");
+    if (run.taskView?.status === "publishing" && run.workspace && run.baseSha) {
+      await tracker.moveStatus(run.issueNumber, "running");
+      continue;
+    }
+    if (run.taskView?.status === "queued") {
+      await tracker.moveStatus(run.issueNumber, "todo");
+      continue;
+    }
+    const awaitingAction = run.lastSessionId && run.workspace && run.baseSha ? "resume_child" : "rerun";
+    await state.set(withTaskView({
+      ...withoutTimestamp(run),
+      status: "awaiting_human",
+      awaitingAction,
+    }, {
+      number: run.issueNumber,
+      title: run.taskView?.title ?? `Issue #${run.issueNumber}`,
+      html_url: run.taskView?.issueUrl,
+    }, {
+      status: "failed",
+      question: "Harness был перезапущен во время выполнения. Отправьте /retry, чтобы безопасно продолжить или перезапустить задачу.",
+    }));
+    await synchronizePersistedAttention(run.issueNumber, state.get(run.issueNumber)!);
   }
 }
 
@@ -627,14 +743,14 @@ async function main() {
   tracker = new GithubTracker(githubCredentials.octokit);
   getGitHubToken = githubCredentials.getToken;
   await ensureRuntimeIdentity(config.dataDir, `${config.owner}/${config.repo}`);
-  await acquireProcessLock(config.dataDir);
+  const processLock = await acquireProcessLock(config.dataDir);
   await state.load();
   await tracker.assertRepositoryAccess();
   await tracker.ensureLabels();
   await reconcilePersistedStates();
   await cleanupWorkspaceStorage();
   await prepareProjectWorkspace();
-  await startHealthServer({
+  runtime.registerServer(await startHealthServer({
     port: config.healthPort,
     repository: `${config.owner}/${config.repo}`,
     workspaceOrigin: remoteUrl,
@@ -695,8 +811,8 @@ async function main() {
       await tracker.moveStatus(current.issueNumber, "todo");
       return { issueNumber: current.issueNumber };
     },
-  });
-  await startPublicGateway({
+  }));
+  runtime.registerServer(await startPublicGateway({
     port: config.publicWebPort,
     upstreamUrl: config.openCodeServerUrl,
     username: config.webUsername,
@@ -704,17 +820,37 @@ async function main() {
     sessionSecret: config.webSessionSecret,
     internalToken: config.openCodeInternalToken,
     sessionTtlSeconds: config.webSessionTtlSeconds,
-  });
+  }));
   console.log(`Issue harness started for ${config.owner}/${config.repo}`);
 
-  const heartbeatIntervalMs = Math.min(10_000, Math.max(1_000, Math.floor(config.pollIntervalMs / 3)));
   lastWorkerHeartbeatAt = Date.now();
-  setInterval(() => { lastWorkerHeartbeatAt = Date.now(); }, heartbeatIntervalMs).unref();
-  const poll = () => { tick().catch((error) => console.error(error)); };
-  setInterval(poll, config.pollIntervalMs);
-  setInterval(() => {
-    cleanupWorkspaceStorage({ onlyWhenIdle: true }).catch((error) => console.error("Workspace cleanup failed", error));
-  }, 60 * 60 * 1000).unref();
+  const poll = () => {
+    runtime.runExclusive(tick).catch((error) => console.error("Harness poll failed", error));
+  };
+  runtime.registerInterval(poll, config.pollIntervalMs);
+  runtime.registerInterval(() => {
+    runtime.runExclusive(async () => cleanupWorkspaceStorage({ onlyWhenIdle: true }))
+      .catch((error) => console.error("Workspace cleanup failed", error));
+  }, 60 * 60 * 1000);
+  const shutdown = async (signal: string) => {
+    console.log(`Issue harness stopping after ${signal}`);
+    const forcedExit = setTimeout(() => {
+      console.error("Issue harness shutdown grace period expired; forcing process exit");
+      process.exit(process.exitCode ?? 0);
+    }, 10_000);
+    try {
+      const result = await runtime.stop(processLock.release, 10_000);
+      if (result === "timed-out") {
+        return;
+      }
+      clearTimeout(forcedExit);
+    } catch (error) {
+      console.error("Issue harness shutdown failed", error);
+      process.exitCode = 1;
+    }
+  };
+  process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
+  process.once("SIGINT", () => { void shutdown("SIGINT"); });
   poll();
 }
 

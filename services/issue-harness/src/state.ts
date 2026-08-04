@@ -23,6 +23,7 @@ export type IssueRunState = {
 };
 
 export function nextRunAction(state?: IssueRunState) {
+  if (!state) return "run" as const;
   if (state?.status === "finished" && state.prUrl) return "finalize" as const;
   if (
     state?.pendingHumanReply
@@ -31,7 +32,15 @@ export function nextRunAction(state?: IssueRunState) {
     && state.workspace
     && state.baseSha
   ) return "resume" as const;
-  return "run" as const;
+  if (state.pendingHumanReply && state.awaitingAction === "rerun") return "run" as const;
+  if (state.status === "running" && state.taskView?.status === "queued") return "run" as const;
+  if (
+    state.status === "running"
+    && state.taskView?.status === "publishing"
+    && state.workspace
+    && state.baseSha
+  ) return "reconcile-publication" as const;
+  return "wait" as const;
 }
 
 export function activeRunForParent(states: IssueRunState[], parentSessionId: string) {
@@ -78,6 +87,25 @@ export class StateStore {
 
   getByParentSession(parentSessionId: string) {
     return activeRunForParent([...this.states.values()], parentSessionId);
+  }
+
+  async pruneFinished(
+    maximumFinished: number,
+    beforeRemove?: (runs: IssueRunState[]) => Promise<void>,
+  ) {
+    if (!Number.isSafeInteger(maximumFinished) || maximumFinished < 0) {
+      throw new Error("Maximum finished run history must be a nonnegative integer");
+    }
+    const finished = [...this.states.values()]
+      .filter((run) => run.status === "finished")
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
+        || right.issueNumber - left.issueNumber);
+    const removed = finished.slice(maximumFinished);
+    if (!removed.length) return [];
+    await beforeRemove?.(removed);
+    for (const run of removed) this.states.delete(run.issueNumber);
+    await this.persist();
+    return removed;
   }
 
   async set(state: Omit<IssueRunState, "updatedAt">) {

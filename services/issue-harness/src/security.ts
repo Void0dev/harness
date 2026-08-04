@@ -4,12 +4,24 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 export async function ensurePrivateRuntimeDirectory(directory: string) {
+  await ensureRuntimeDirectory(directory, 0o700);
+}
+
+export async function ensureSharedRuntimeDirectory(directory: string) {
+  await ensureRuntimeDirectory(directory, 0o2770);
+}
+
+export async function ensureSharedRuntimeParentDirectory(directory: string) {
+  await ensureRuntimeDirectory(directory, 0o2750);
+}
+
+async function ensureRuntimeDirectory(directory: string, mode: number) {
   const expected = path.resolve(directory);
-  await fs.mkdir(expected, { recursive: true, mode: 0o700 });
+  await fs.mkdir(expected, { recursive: true, mode });
   if ((await fs.lstat(expected)).isSymbolicLink()) {
     throw new Error(`Refusing symbolic-link runtime directory: ${expected}`);
   }
-  await fs.chmod(expected, 0o700);
+  await fs.chmod(expected, mode);
 }
 
 export async function ensureRuntimeIdentity(dataDir: string, repository: string) {
@@ -75,8 +87,8 @@ export async function acquireProcessLock(dataDir: string) {
       process.once("exit", releaseOnExit);
       return {
         release: async () => {
-          process.removeListener("exit", releaseOnExit);
           await release();
+          process.removeListener("exit", releaseOnExit);
         },
       };
     } catch (error) {

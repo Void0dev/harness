@@ -103,11 +103,12 @@ test("accepts an ai:todo Issue created by the repository GitHub App", async () =
   const fake = {
     rest: {
       issues: {
-        listForRepo: async () => ({ data: [] }),
+        listForRepo: async (options: { labels: string }) => ({
+          data: options.labels === "ai:todo" ? [appIssue] : [],
+        }),
       },
     },
-    paginate: async (_method: unknown, options: { labels: string }) =>
-      options.labels === "ai:todo" ? [appIssue] : [],
+    paginate: async () => { throw new Error("Issue polling must be bounded"); },
   };
   const tracker = new GithubTracker(fake as never);
 
@@ -133,9 +134,15 @@ test("finds unfinished work only for the matching OpenCode parent", async () => 
     },
   ];
   const fake = {
-    rest: { issues: { listForRepo: async () => ({ data: [] }) } },
-    paginate: async (_method: unknown, options: { labels: string }) =>
-      issues.filter((issue) => issue.labels.some((label) => label.name === options.labels)),
+    rest: {
+      search: {
+        issuesAndPullRequests: async ({ q }: { q: string }) => ({
+          data: {
+            items: q.includes("ses_parent_12345678") ? issues : [],
+          },
+        }),
+      },
+    },
   };
   const tracker = new GithubTracker(fake as never);
 
@@ -173,6 +180,37 @@ test("moves needs-human work out of running and removes needs-human when resumed
   await tracker.moveStatus(57, "todo");
   assert.equal(events[0], "add:ai:todo");
   assert.ok(events.includes("remove:ai:needs-human"));
+});
+
+test("reuses an existing Harness human question after restart", async () => {
+  const { GithubTracker } = await import("../src/github.js");
+  let creates = 0;
+  const question = "Which database should be used?";
+  const fake = {
+    rest: { issues: {
+      addLabels: async () => undefined,
+      removeLabel: async () => undefined,
+      get: async () => ({ data: { comments: 1 } }),
+      listComments: async () => ({ data: [{
+        id: 9001,
+        body: `Human attention needed:\n\n${question}`,
+        created_at: "2026-08-03T10:00:00.000Z",
+        author_association: "NONE",
+        user: { login: "harness[bot]", type: "Bot" },
+      }] }),
+      createComment: async () => {
+        creates += 1;
+        throw new Error("must not create a duplicate question");
+      },
+    } },
+  };
+  const tracker = new GithubTracker(fake as never);
+
+  assert.deepEqual(await tracker.ensureHumanQuestion(57, question), {
+    id: 9001,
+    createdAt: "2026-08-03T10:00:00.000Z",
+  });
+  assert.equal(creates, 0);
 });
 
 test("returns only trusted human replies posted after the Harness question", async () => {
@@ -215,8 +253,11 @@ test("returns only trusted human replies posted after the Harness question", asy
     },
   ];
   const fake = {
-    rest: { issues: { listComments: async () => ({ data: [] }) } },
-    paginate: async () => comments,
+    rest: { issues: {
+      get: async () => ({ data: { comments: comments.length } }),
+      listComments: async () => ({ data: comments }),
+    } },
+    paginate: async () => { throw new Error("Comment polling must be bounded"); },
   };
   const tracker = new GithubTracker(fake as never);
 
@@ -239,13 +280,34 @@ test("returns only trusted human replies posted after the Harness question", asy
   ]);
 });
 
+test("reads at most five newest comment pages for human replies", async () => {
+  const { GithubTracker } = await import("../src/github.js");
+  const pages: number[] = [];
+  const fake = {
+    rest: { issues: {
+      get: async () => ({ data: { comments: 900 } }),
+      listComments: async ({ page }: { page: number }) => {
+        pages.push(page);
+        return { data: [] };
+      },
+    } },
+  };
+  const tracker = new GithubTracker(fake as never);
+
+  await tracker.humanReplies(57, 100);
+
+  assert.deepEqual(pages, [9, 8, 7, 6, 5]);
+});
+
 test("prefers an existing running Issue over newly queued work", async () => {
   const { GithubTracker } = await import("../src/github.js");
   const fake = {
-    rest: { issues: { listForRepo: async () => ({ data: [] }) } },
-    paginate: async (_method: unknown, options: { labels: string }) => options.labels === "ai:running"
-      ? [{ number: 1, title: "Running", body: "", labels: [{ name: "ai:running" }] }]
-      : [{ number: 2, title: "Todo", body: "", labels: [{ name: "ai:todo" }] }],
+    rest: { issues: { listForRepo: async (options: { labels: string }) => ({
+      data: options.labels === "ai:running"
+        ? [{ number: 1, title: "Running", body: "", labels: [{ name: "ai:running" }] }]
+        : [{ number: 2, title: "Todo", body: "", labels: [{ name: "ai:todo" }] }],
+    }) } },
+    paginate: async () => { throw new Error("Issue polling must be bounded"); },
   };
   const tracker = new GithubTracker(fake as never);
   assert.equal((await tracker.nextIssue())?.number, 1);

@@ -197,6 +197,8 @@ A real worker question accepts the next ordinary message in the same parent chat
 
 A technical failure is intentionally different. Ordinary conversation cannot restart coding accidentally; the user must issue `/retry`. When the child session and workspace are recoverable, Harness resumes them. Otherwise it prepares a fresh run.
 
+After a Harness restart, queued work remains queued, an interrupted coding session is moved to an explicit technical-failure state that requires `/retry`, and a run that had already reached publication is reconciled against its existing local branch and draft pull request. Harness never starts a replacement coding run merely because a persisted Issue still has `ai:running`.
+
 ## Explicit Merge Operations
 
 Harness has no merge endpoint, merge service, release role, publisher pipeline, or merge ledger. `/merge` is an ordinary command prompt executed by the same standard OpenCode `build` agent.
@@ -262,6 +264,8 @@ While the worker is active, the response shows compact progress. On completion, 
 On first startup Harness clones `stage` into `context`. On later startups it may fast-forward only a clean local `stage`. A different checked-out branch or any uncommitted project work is preserved.
 
 Each Issue receives a separate temporary clone, so automated Issue work cannot modify the persistent interactive checkout. Finished workspaces are removed only after the configured retention period.
+
+Harness compacts finished history down to the latest 500 run records and removes workspaces belonging to pruned records. Active, queued, and human-blocked runs are never removed by history compaction.
 
 Harness state is written atomically with private file permissions and rejects credential-shaped fields.
 

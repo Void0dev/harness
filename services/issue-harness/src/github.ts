@@ -103,8 +103,8 @@ export class GithubTracker {
   }
 
   async nextIssue() {
-    const todo = await this.listIssues(labels.todo);
-    const running = await this.listIssues(labels.running);
+    const todo = await this.listIssues(labels.todo, 1);
+    const running = await this.listIssues(labels.running, 1);
     const candidates = [...running, ...todo].filter((issue) => {
       const issueLabels = issue.labels.map((label) => (typeof label === "string" ? label : label.name));
       return (
@@ -117,27 +117,23 @@ export class GithubTracker {
   }
 
   async findBlockingIssue(parentSessionId: string) {
-    const groups = await Promise.all([
-      this.listIssues(labels.running),
-      this.listIssues(labels.todo),
-      this.listIssues(labels.needsHuman),
-    ]);
-    const seen = new Set<number>();
-    for (const issue of groups.flat()) {
-      if (seen.has(issue.number)) continue;
-      seen.add(issue.number);
-      if (!issue.pull_request && parseParentSessionId(issue.body) === parentSessionId) return issue;
+    if (!/^ses_[A-Za-z0-9_-]{8,128}$/.test(parentSessionId)) {
+      throw new Error("Invalid OpenCode parent session ID");
     }
-    return null;
+    const response = await this.octokit.rest.search.issuesAndPullRequests({
+      q: `repo:${config.owner}/${config.repo} is:issue is:open in:body "opencode-harness-parent: ${parentSessionId}"`,
+      per_page: 10,
+    });
+    return response.data.items.find((issue) => {
+      const issueLabels = issue.labels.map((label) => (typeof label === "string" ? label : label.name));
+      return !issue.pull_request
+        && !issueLabels.includes(labels.finished)
+        && parseParentSessionId(issue.body) === parentSessionId;
+    }) ?? null;
   }
 
   async recentComments(issueNumber: number) {
-    const comments = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
-      owner: config.owner,
-      repo: config.repo,
-      issue_number: issueNumber,
-      per_page: 20,
-    });
+    const comments = await this.latestIssueComments(issueNumber, 3);
     return comments
       .filter((comment) => {
         const body = comment.body ?? "";
@@ -156,12 +152,7 @@ export class GithubTracker {
     if (!Number.isSafeInteger(afterCommentId) || afterCommentId <= 0) {
       throw new Error("Invalid Harness question comment ID");
     }
-    const comments = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
-      owner: config.owner,
-      repo: config.repo,
-      issue_number: issueNumber,
-      per_page: 100,
-    });
+    const comments = await this.latestIssueComments(issueNumber, 5);
     return comments.flatMap((comment) => {
       const body = comment.body?.trim() ?? "";
       const id = comment.id;
@@ -187,6 +178,15 @@ export class GithubTracker {
   async needsHuman(issueNumber: number, body: string) {
     await this.markNeedsHuman(issueNumber);
     return await this.comment(issueNumber, `Human attention needed:\n\n${body}`);
+  }
+
+  async ensureHumanQuestion(issueNumber: number, body: string) {
+    await this.markNeedsHuman(issueNumber);
+    const commentBody = `Human attention needed:\n\n${body}`;
+    const comments = await this.latestIssueComments(issueNumber, 3);
+    const existing = [...comments].reverse().find((comment) =>
+      comment.body === commentBody && comment.user?.type === "Bot");
+    return existing ? commentMetadata(existing) : await this.comment(issueNumber, commentBody);
   }
 
   async markNeedsHuman(issueNumber: number) {
@@ -223,13 +223,7 @@ export class GithubTracker {
       issue_number: issueNumber,
       body,
     });
-    if (
-      !Number.isSafeInteger(response.data.id)
-      || response.data.id <= 0
-      || typeof response.data.created_at !== "string"
-      || Number.isNaN(Date.parse(response.data.created_at))
-    ) throw new Error("GitHub returned invalid comment metadata");
-    return { id: response.data.id, createdAt: new Date(response.data.created_at).toISOString() };
+    return commentMetadata(response.data);
   }
 
   async findHarnessPullRequest(issueNumber: number, branch: string): Promise<PullRequestSummary | null> {
@@ -250,17 +244,56 @@ export class GithubTracker {
     return pullRequest ? summarizeListedPullRequest(pullRequest) : null;
   }
 
-  private async listIssues(label: string) {
-    return await this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
+  private async listIssues(label: string, maximumPages: number) {
+    const issues = [];
+    for (let page = 1; page <= maximumPages; page += 1) {
+      const response = await this.octokit.rest.issues.listForRepo({
+        owner: config.owner,
+        repo: config.repo,
+        state: "open",
+        labels: label,
+        per_page: 20,
+        page,
+        sort: "created",
+        direction: "asc",
+      });
+      issues.push(...response.data);
+      if (response.data.length < 20) break;
+    }
+    return issues;
+  }
+
+  private async latestIssueComments(issueNumber: number, maximumPages: number) {
+    const issue = await this.octokit.rest.issues.get({
       owner: config.owner,
       repo: config.repo,
-      state: "open",
-      labels: label,
-      per_page: 20,
-      sort: "created",
-      direction: "asc",
+      issue_number: issueNumber,
     });
+    const count = issue.data.comments;
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error("GitHub returned an invalid Issue comment count");
+    if (count === 0) return [];
+    const lastPage = Math.ceil(count / 100);
+    const firstPage = Math.max(1, lastPage - maximumPages + 1);
+    const pages = Array.from({ length: lastPage - firstPage + 1 }, (_, index) => lastPage - index);
+    const responses = await Promise.all(pages.map((page) => this.octokit.rest.issues.listComments({
+      owner: config.owner,
+      repo: config.repo,
+      issue_number: issueNumber,
+      per_page: 100,
+      page,
+    })));
+    return responses.flatMap((response) => response.data).sort((left, right) => left.id - right.id);
   }
+}
+
+function commentMetadata(comment: { id?: unknown; created_at?: unknown }) {
+  if (
+    !Number.isSafeInteger(comment.id)
+    || Number(comment.id) <= 0
+    || typeof comment.created_at !== "string"
+    || Number.isNaN(Date.parse(comment.created_at))
+  ) throw new Error("GitHub returned invalid comment metadata");
+  return { id: Number(comment.id), createdAt: new Date(comment.created_at).toISOString() };
 }
 
 function summarizeListedPullRequest(pullRequest: SummarizablePullRequest): PullRequestSummary {

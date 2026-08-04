@@ -20,11 +20,39 @@ function state(status: IssueRunState["status"], prUrl?: string): IssueRunState {
   };
 }
 
-test("finalizes a persisted completed pull request and otherwise runs the agent", () => {
+test("finalizes a persisted completed pull request and runs only new work", () => {
   assert.equal(nextRunAction(state("finished", "https://github.com/acme/service/pull/1")), "finalize");
-  assert.equal(nextRunAction(state("finished")), "run");
+  assert.equal(nextRunAction(state("finished")), "wait");
   assert.equal(nextRunAction(), "run");
-  assert.equal(nextRunAction(state("awaiting_human")), "run");
+  assert.equal(nextRunAction(state("awaiting_human")), "wait");
+  assert.equal(nextRunAction(state("running")), "wait");
+  assert.equal(nextRunAction({
+    ...state("running"),
+    taskView: {
+      schemaVersion: 1,
+      issueNumber: 42,
+      title: "Queued task",
+      status: "queued",
+      stages: ["accepted"],
+      updatedAt: new Date(0).toISOString(),
+    },
+  }), "run");
+});
+
+test("reconciles a persisted publishing run instead of starting another worker", () => {
+  assert.equal(nextRunAction({
+    ...state("running"),
+    workspace: "/data/runs/issue-42/run-abc",
+    baseSha: "a".repeat(40),
+    taskView: {
+      schemaVersion: 1,
+      issueNumber: 42,
+      title: "Publish existing work",
+      status: "publishing",
+      stages: ["accepted", "studying", "coding", "publishing"],
+      updatedAt: new Date(0).toISOString(),
+    },
+  }), "reconcile-publication");
 });
 
 test("resumes the same worker after a human answer or technical retry", () => {
@@ -36,6 +64,14 @@ test("resumes the same worker after a human answer or technical retry", () => {
     workspace: "/data/runs/issue-42/run-abc",
     baseSha: "a".repeat(40),
   }), "resume");
+});
+
+test("reruns only after an explicit retry when the previous worker cannot be resumed", () => {
+  assert.equal(nextRunAction({
+    ...state("running"),
+    awaitingAction: "rerun",
+    pendingHumanReply: "Retry the interrupted operation after the reported technical failure.",
+  }), "run");
 });
 
 test("loads legacy publication and merge state but persists only the simple run envelope", async (t) => {
@@ -142,6 +178,50 @@ test("serializes concurrent state writes into one valid snapshot", async (t) => 
   assert.equal(persisted.schemaVersion, 2);
   assert.equal(persisted.runs.length, 20);
   await assert.rejects(fs.access(path.join(dataDir, "state", "runs.json.tmp")));
+});
+
+test("bounds durable history by pruning older finished runs", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "issue-harness-state-prune-"));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const stateDirectory = path.join(dataDir, "state");
+  await fs.mkdir(stateDirectory);
+  const runs = [1, 2, 3, 4].map((issueNumber) => ({
+    issueNumber,
+    branch: `opencode/issue-${issueNumber}`,
+    status: "finished",
+    prUrl: `https://github.com/acme/service/pull/${issueNumber}`,
+    updatedAt: new Date(issueNumber * 1_000).toISOString(),
+  }));
+  runs.push({
+    issueNumber: 5,
+    branch: "opencode/issue-5-active",
+    status: "running",
+    prUrl: undefined,
+    updatedAt: new Date(0).toISOString(),
+  });
+  await fs.writeFile(path.join(stateDirectory, "runs.json"), `${JSON.stringify({ schemaVersion: 2, runs })}\n`);
+  const store = new StateStore(dataDir);
+  await store.load();
+
+  assert.deepEqual((await store.pruneFinished(2)).map((run) => run.issueNumber), [2, 1]);
+  assert.deepEqual(store.all().map((run) => run.issueNumber), [3, 4, 5]);
+  const persisted = JSON.parse(await fs.readFile(path.join(stateDirectory, "runs.json"), "utf8"));
+  assert.deepEqual(persisted.runs.map((run: IssueRunState) => run.issueNumber), [3, 4, 5]);
+});
+
+test("keeps pruned runs durable when external cleanup fails", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "issue-harness-state-prune-failure-"));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const store = new StateStore(dataDir);
+  await store.load();
+  await store.set({ issueNumber: 1, branch: "opencode/issue-1", status: "finished", prUrl: "https://github.com/acme/service/pull/1" });
+  await store.set({ issueNumber: 2, branch: "opencode/issue-2", status: "finished", prUrl: "https://github.com/acme/service/pull/2" });
+
+  await assert.rejects(store.pruneFinished(1, async () => {
+    throw new Error("workspace cleanup failed");
+  }), /workspace cleanup failed/);
+
+  assert.deepEqual(store.all().map((run) => run.issueNumber), [1, 2]);
 });
 
 test("persists parent, worker, pull request URL, and human reply state", async (t) => {
