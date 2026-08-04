@@ -112,6 +112,16 @@ class SkillContractTest(unittest.TestCase):
         self.assertIn("Only select repositories", registration)
         self.assertIn("webhook", registration.lower())
 
+    def test_skill_returns_owner_specific_clickable_github_app_links(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        registration = (SKILL / "assets" / "release-app-registration.md").read_text()
+
+        self.assertIn("https://github.com/organizations/<owner>/settings/apps/new", skill)
+        self.assertIn("https://github.com/settings/apps/new", skill)
+        self.assertIn("Markdown-ссылки", skill)
+        self.assertIn("{{CREATE_APP_URL}}", registration)
+        self.assertIn("{{APPS_SETTINGS_URL}}", registration)
+
     def test_skill_requires_manual_release_app_checkpoint_before_mutation(self):
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
 

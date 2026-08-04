@@ -43,6 +43,13 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 
 Сгенерируй exact instructions из `assets/release-app-registration.md` для repository-scoped GitHub App с именем `<repo>-release-app` (далее Release App):
 
+Сначала прочитай `owner.type` из verified GitHub repository metadata и подставь в шаблон кликабельные Markdown-ссылки:
+
+- для `Organization`: create URL `https://github.com/organizations/<owner>/settings/apps/new`, settings URL `https://github.com/organizations/<owner>/settings/apps`;
+- для `User`: create URL `https://github.com/settings/apps/new`, settings URL `https://github.com/settings/apps`.
+
+Не ограничивайся текстом «откройте GitHub Settings»: в checkpoint всегда явно выведи обе ссылки с понятными подписями. Не угадывай organization URL для user-owned repository и наоборот.
+
 - Metadata: read-only;
 - Contents: read/write;
 - Issues: read/write;
