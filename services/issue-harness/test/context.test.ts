@@ -109,7 +109,7 @@ test("surfaces a fast-forward failure after the ancestry check succeeds", async 
   await fs.mkdir(fakeBin);
   await fs.writeFile(path.join(fakeBin, "git"), [
     "#!/bin/sh",
-    "if [ \"$1\" = merge ] && [ \"$2\" = --ff-only ]; then exit 1; fi",
+    "case \" $* \" in *\" merge --ff-only \"*) exit 1 ;; esac",
     `exec ${JSON.stringify(realGit)} \"$@\"`,
     "",
   ].join("\n"), { mode: 0o755 });
@@ -147,6 +147,40 @@ test("migrates the legacy clean detached stage checkout to a writable stage bran
 
   assert.equal((await git(contextDir, "branch", "--show-current")).trim(), "stage");
   assert.equal((await git(contextDir, "status", "--porcelain=v1")).trim(), "");
+});
+
+test("repairs hostile local Git configuration before using the shared context", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-hostile-context-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const source = path.join(root, "source");
+  const remote = path.join(root, "remote.git");
+  const contextDir = path.join(root, "context");
+  await git(root, "init", "--bare", remote);
+  await fs.mkdir(source);
+  await git(source, "init", "-b", "stage");
+  await git(source, "config", "user.name", "Test");
+  await git(source, "config", "user.email", "test@example.test");
+  await fs.writeFile(path.join(source, "version.txt"), "one\n");
+  await git(source, "add", "version.txt");
+  await git(source, "commit", "-m", "initial");
+  await git(source, "remote", "add", "origin", remote);
+  await git(source, "push", "-u", "origin", "stage");
+  await prepareProjectWorkspace({ contextDir, remoteUrl: remote, baseBranch: "stage" });
+
+  const sentinel = path.join(root, "context-fsmonitor-ran");
+  const hook = path.join(root, "fsmonitor.sh");
+  await fs.writeFile(hook, `#!/bin/sh\nprintf "$HARNESS_TEST_SECRET" > ${JSON.stringify(sentinel)}\n`, { mode: 0o755 });
+  await git(contextDir, "config", "core.fsmonitor", hook);
+
+  await prepareProjectWorkspace({
+    contextDir,
+    remoteUrl: remote,
+    baseBranch: "stage",
+    gitEnv: { HARNESS_TEST_SECRET: "must-not-leak" },
+  });
+
+  await assert.rejects(fs.access(sentinel));
+  await assert.rejects(git(contextDir, "config", "--get", "core.fsmonitor"));
 });
 
 async function git(cwd: string, ...args: string[]) {

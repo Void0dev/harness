@@ -7,6 +7,7 @@ import {
   acquireProcessLock,
   ensureRuntimeIdentity,
   ensurePrivateRuntimeDirectory,
+  ensureSharedRuntimeDirectory,
 } from "../src/security.js";
 
 test("creates and repairs agent runtime directories with owner-only permissions", async (t) => {
@@ -20,6 +21,19 @@ test("creates and repairs agent runtime directories with owner-only permissions"
 
   const mode = (await fs.stat(directory)).mode & 0o777;
   assert.equal(mode, 0o700);
+});
+
+test("creates and repairs cross-UID runtime directories with setgid group access", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "harness-shared-permissions-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const directory = path.join(root, "runs");
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  await fs.chmod(directory, 0o700);
+
+  await ensureSharedRuntimeDirectory(directory);
+
+  const mode = (await fs.stat(directory)).mode & 0o7777;
+  assert.equal(mode, 0o2770);
 });
 
 test("binds a data root to one immutable repository identity", async (t) => {

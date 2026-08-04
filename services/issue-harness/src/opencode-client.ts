@@ -85,11 +85,17 @@ export class OpenCodeClient {
     directory: string;
     prompt: string;
     onProgress?: (parts: unknown[]) => void | Promise<void>;
+    signal?: AbortSignal;
   }) {
+    assertNotAborted(options.signal);
     this.assertSessionId(options.sessionId);
-    const before = await this.listMessages(options.sessionId, options.directory);
+    const before = await this.listMessages(options.sessionId, options.directory, options.signal);
     const previousAssistantIds = new Set(before.flatMap((message) =>
       message.info?.role === "assistant" && typeof message.info.id === "string"
+        ? [message.info.id]
+        : []));
+    const previousUserIds = new Set(before.flatMap((message) =>
+      message.info?.role === "user" && typeof message.info.id === "string"
         ? [message.info.id]
         : []));
 
@@ -103,12 +109,15 @@ export class OpenCodeClient {
         parts: [{ type: "text", text: options.prompt }],
       },
       true,
+      options.signal,
     );
     const response = await this.waitForAssistantResponse(
       options.sessionId,
       options.directory,
       previousAssistantIds,
+      previousUserIds,
       options.onProgress,
+      options.signal,
     );
     return { text: this.messageText(response.message), ...response.generation };
   }
@@ -147,53 +156,65 @@ export class OpenCodeClient {
     sessionId: string,
     directory: string,
     previousAssistantIds: Set<string>,
+    previousUserIds: Set<string>,
     onProgress?: (parts: unknown[]) => void | Promise<void>,
+    signal?: AbortSignal,
   ) {
     const deadline = Date.now() + this.sessionTimeoutMs;
     const reportedProgress = new Map<string, string>();
     let lastTransientError: unknown;
     while (Date.now() <= deadline) {
+      assertNotAborted(signal);
       try {
-        const statuses = await this.request("GET", "/session/status", directory) as Record<string, unknown>;
+        const statuses = await this.request("GET", "/session/status", directory, undefined, false, signal) as Record<string, unknown>;
         const status = statuses[sessionId] as { type?: unknown } | undefined;
         if (status && status.type !== "idle" && status.type !== "busy" && status.type !== "retry") {
           throw new Error("OpenCode returned an invalid session status");
         }
-        const messages = await this.listMessages(sessionId, directory);
-        if (onProgress) {
-          for (const message of messages) {
-            if (
-              message.info?.role === "assistant"
-              && typeof message.info.id === "string"
-              && !previousAssistantIds.has(message.info.id)
-            ) {
-              const parts = Array.isArray(message.parts) ? message.parts : [];
-              const fingerprint = JSON.stringify(parts);
-              if (reportedProgress.get(message.info.id) !== fingerprint) {
-                reportedProgress.set(message.info.id, fingerprint);
-                await onProgress(parts);
-              }
-            }
-          }
+        const messages = await this.listMessages(sessionId, directory, signal);
+        const freshUserIds = new Set(messages.flatMap((message) =>
+          message.info?.role === "user"
+          && typeof message.info.id === "string"
+          && !previousUserIds.has(message.info.id)
+            ? [message.info.id]
+            : []));
+        if (freshUserIds.size === 0) {
+          lastTransientError = undefined;
+          await abortableDelay(this.pollIntervalMs, signal);
+          continue;
         }
         const freshAssistants = messages.filter((message) =>
           message.info?.role === "assistant"
           && typeof message.info.id === "string"
-          && !previousAssistantIds.has(message.info.id));
+          && !previousAssistantIds.has(message.info.id)
+          && typeof message.info.parentID === "string"
+          && freshUserIds.has(message.info.parentID));
+        if (onProgress) {
+          for (const message of freshAssistants) {
+            const parts = Array.isArray(message.parts) ? message.parts : [];
+            const fingerprint = JSON.stringify(parts);
+            if (reportedProgress.get(message.info!.id as string) !== fingerprint) {
+              reportedProgress.set(message.info!.id as string, fingerprint);
+              await onProgress(parts);
+            }
+          }
+        }
+        const sessionSettled = status === undefined || status.type === "idle";
         const failed = [...freshAssistants].reverse().find((message) => message.info?.error);
-        if (failed && (!status || status.type === "idle")) throw sessionError(failed.info?.error);
+        if (failed && sessionSettled) throw sessionError(failed.info?.error);
         const response = [...freshAssistants].reverse().find((message) =>
           !message.info?.error && this.messageText(message).trim()
-          && (Number.isSafeInteger(message.info?.time?.completed) || message.info?.time?.completed === undefined));
-        if (response && (!status || status.type === "idle")) {
+          && Number.isSafeInteger(message.info?.time?.completed));
+        if (response && sessionSettled) {
           return { message: response, generation: this.generationMetadata(freshAssistants) };
         }
         lastTransientError = undefined;
       } catch (error) {
+        assertNotAborted(signal);
         if (error instanceof OpenCodeSessionError || !transientOpenCodeError(error)) throw error;
         lastTransientError = error;
       }
-      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
+      await abortableDelay(this.pollIntervalMs, signal);
     }
     throw new Error("OpenCode session did not finish before the execution timeout", { cause: lastTransientError });
   }
@@ -212,8 +233,8 @@ export class OpenCodeClient {
     };
   }
 
-  private async listMessages(sessionId: string, directory: string) {
-    const value = await this.request("GET", `/session/${sessionId}/message`, directory);
+  private async listMessages(sessionId: string, directory: string, signal?: AbortSignal) {
+    const value = await this.request("GET", `/session/${sessionId}/message`, directory, undefined, false, signal);
     if (!Array.isArray(value)) throw new Error("OpenCode returned an invalid message list");
     return value as SessionMessage[];
   }
@@ -233,6 +254,7 @@ export class OpenCodeClient {
     directory: string,
     body?: object,
     allowEmpty = false,
+    externalSignal?: AbortSignal,
   ) {
     const url = new URL(pathname, this.options.baseUrl);
     url.searchParams.set("directory", directory);
@@ -243,7 +265,7 @@ export class OpenCodeClient {
         (async () => {
           const response = await this.fetchImpl(url, {
             method,
-            signal: controller.signal,
+            signal: externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal,
             headers: {
               Accept: "application/json",
               Authorization: this.authorization,
@@ -285,6 +307,26 @@ export class OpenCodeClient {
   private assertSessionId(value: string) {
     if (!SESSION_ID.test(value)) throw new Error("Invalid OpenCode session ID");
   }
+}
+
+function assertNotAborted(signal: AbortSignal | undefined) {
+  if (signal?.aborted) throw new Error("OpenCode session polling was interrupted");
+}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal | undefined) {
+  assertNotAborted(signal);
+  if (!signal) return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("OpenCode session polling was interrupted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function transientOpenCodeError(error: unknown) {

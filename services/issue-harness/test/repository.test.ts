@@ -73,9 +73,28 @@ test("creates an execution clone with independent Git metadata and a credential-
   assert.equal(await worktreeIsClean(execution.workspace), true);
   await fs.writeFile(path.join(execution.workspace, "untracked.txt"), "pending\n");
   assert.equal(await worktreeIsClean(execution.workspace), false);
-  assert.equal((await fs.stat(runsRoot)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(runsRoot)).mode & 0o7777, 0o2770);
+  assert.equal((await fs.stat(execution.workspace)).mode & 0o7777, 0o2770);
   assert.equal(await fs.readFile(path.join(execution.workspace, "version.txt"), "utf8"), "v1\n");
   await assert.rejects(fs.access(hookSentinel));
+});
+
+test("does not execute a worker-controlled fsmonitor during verification", async (t) => {
+  const fixture = await createRemoteFixture();
+  t.after(() => fs.rm(fixture.root, { recursive: true, force: true }));
+  const execution = await prepareIsolatedExecutionWorkspace({
+    dataDir: path.join(fixture.root, "data"),
+    issueNumber: 18,
+    remoteUrl: fixture.remote,
+    baseBranch: "stage",
+  });
+  const sentinel = path.join(fixture.root, "fsmonitor-ran");
+  const hook = path.join(fixture.root, "fsmonitor.sh");
+  await fs.writeFile(hook, `#!/bin/sh\nprintf compromised > ${JSON.stringify(sentinel)}\n`, { mode: 0o755 });
+  await git(execution.workspace, "config", "core.fsmonitor", hook);
+
+  assert.equal(await worktreeIsClean(execution.workspace), true);
+  await assert.rejects(fs.access(sentinel));
 });
 
 async function createRemoteFixture() {

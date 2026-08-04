@@ -33,6 +33,9 @@ test("creates a child session, submits asynchronously, and reads the result afte
       if (parsed.pathname === "/session/ses_child_12345678/message") {
         const final = statusReads >= 3;
         return Response.json(statusReads >= 2 ? [{
+          info: { id: "msg_user_1", role: "user", time: { created: 900 } },
+          parts: [{ type: "text", text: "Implement the issue" }],
+        }, {
           info: {
             id: "msg_1", role: "assistant", parentID: "msg_user_1", modelID: "gpt-5.5",
             time: { created: 1_000, completed: final ? 102_000 : undefined },
@@ -93,7 +96,10 @@ test("continues the same child session with a human answer", async () => {
           info: { id: "msg_old", role: "assistant" },
           parts: [{ type: "text", text: "Need an answer" }],
         }, {
-          info: { id: "msg_new", role: "assistant" },
+          info: { id: "msg_user_new", role: "user" },
+          parts: [{ type: "text", text: "Use PostgreSQL" }],
+        }, {
+          info: { id: "msg_new", role: "assistant", parentID: "msg_user_new", time: { completed: 2_000 } },
           parts: [{ type: "text", text: "Continued <promise>COMPLETE</promise>" }],
         }]);
       }
@@ -130,6 +136,9 @@ test("does not publish identical streaming progress on every poll", async () => 
         messageReads += 1;
         if (messageReads === 1) return Response.json([]);
         return Response.json([{
+          info: { id: "msg_user", role: "user", time: { created: 900 } },
+          parts: [{ type: "text", text: "Continue" }],
+        }, {
           info: {
             id: "msg_new", role: "assistant", parentID: "msg_user",
             time: { created: 1_000, ...(statusReads >= 3 ? { completed: 2_000 } : {}) },
@@ -253,6 +262,9 @@ test("keeps polling after a transient OpenCode read failure", async () => {
         messageReads += 1;
         if (messageReads === 1) return Response.json([]);
         return Response.json([{
+          info: { id: "msg_user", role: "user", time: { created: 900 } },
+          parts: [{ type: "text", text: "Work" }],
+        }, {
           info: { id: "msg_done", role: "assistant", parentID: "msg_user", modelID: "gpt-5.5", time: { created: 1_000, completed: 2_000 }, finish: "stop" },
           parts: [{ type: "text", text: "Done <promise>COMPLETE</promise>" }],
         }]);
@@ -287,6 +299,9 @@ test("reports an invalidated model credential instead of recommending a blind re
         messageReads += 1;
         if (messageReads === 1) return Response.json([]);
         return Response.json([{
+          info: { id: "msg_user", role: "user", time: { created: 900 } },
+          parts: [{ type: "text", text: "Work" }],
+        }, {
           info: {
             id: "msg_failed", role: "assistant", parentID: "msg_user", modelID: "gpt-5.5",
             time: { created: 1_000, completed: 2_000 },
@@ -306,4 +321,138 @@ test("reports an invalidated model credential instead of recommending a blind re
     (error: Error & { code?: string }) => error.code === "model_authentication",
   );
   assert.equal((await client.sessionFailure("ses_child_12345678", "/workspace"))?.code, "model_authentication");
+});
+
+test("waits for explicit idle status and a completed response for the submitted user turn", async () => {
+  let messageReads = 0;
+  let statusReads = 0;
+  const client = new OpenCodeClient({
+    baseUrl: "http://opencode-web:4096",
+    internalToken: "t".repeat(32),
+    modelId: "gpt-5.5",
+    parentDirectory: "/workspace",
+    pollIntervalMs: 0,
+    sessionTimeoutMs: 5_000,
+    fetchImpl: async (url) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname.endsWith("/message")) {
+        messageReads += 1;
+        if (messageReads === 1) return Response.json([]);
+        return Response.json([
+          {
+            info: { id: "msg_user_new", role: "user", time: { created: 1_000 } },
+            parts: [{ type: "text", text: "Work" }],
+          },
+          {
+            info: {
+              id: "msg_assistant_new",
+              role: "assistant",
+              parentID: "msg_user_new",
+              time: { created: 1_100, ...(statusReads >= 2 ? { completed: 2_000 } : {}) },
+            },
+            parts: [{
+              type: "text",
+              text: statusReads >= 2 ? "Final <promise>COMPLETE</promise>" : "partial response",
+            }],
+          },
+        ]);
+      }
+      if (pathname.endsWith("/prompt_async")) return new Response(null, { status: 204 });
+      if (pathname === "/session/status") {
+        statusReads += 1;
+        return Response.json(statusReads >= 2 ? { ses_child_12345678: { type: "idle" } } : {});
+      }
+      throw new Error(`Unexpected request: ${pathname}`);
+    },
+  });
+
+  const result = await client.continueSession({
+    sessionId: "ses_child_12345678",
+    directory: "/workspace",
+    prompt: "Work",
+  });
+
+  assert.equal(result.text, "Final <promise>COMPLETE</promise>");
+  assert.equal(statusReads, 2);
+});
+
+test("accepts a completed response when OpenCode removes the idle session from its status map", async () => {
+  let messageReads = 0;
+  const client = new OpenCodeClient({
+    baseUrl: "http://opencode-web:4096",
+    internalToken: "t".repeat(32),
+    modelId: "gpt-5.5",
+    parentDirectory: "/workspace",
+    pollIntervalMs: 0,
+    sessionTimeoutMs: 20,
+    fetchImpl: async (url) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname.endsWith("/message")) {
+        messageReads += 1;
+        if (messageReads === 1) return Response.json([]);
+        return Response.json([
+          {
+            info: { id: "msg_user_new", role: "user", time: { created: 1_000 } },
+            parts: [{ type: "text", text: "Work" }],
+          },
+          {
+            info: {
+              id: "msg_assistant_new",
+              role: "assistant",
+              parentID: "msg_user_new",
+              time: { created: 1_100, completed: 2_000 },
+            },
+            parts: [{ type: "text", text: "Done <promise>COMPLETE</promise>" }],
+          },
+        ]);
+      }
+      if (pathname.endsWith("/prompt_async")) return new Response(null, { status: 204 });
+      if (pathname === "/session/status") return Response.json({});
+      throw new Error(`Unexpected request: ${pathname}`);
+    },
+  });
+
+  const result = await client.continueSession({
+    sessionId: "ses_child_12345678",
+    directory: "/workspace",
+    prompt: "Work",
+  });
+
+  assert.match(result.text, /COMPLETE/);
+});
+
+test("stops session polling when the runtime abort signal fires", async () => {
+  let messageReads = 0;
+  const controller = new AbortController();
+  const client = new OpenCodeClient({
+    baseUrl: "http://opencode-web:4096",
+    internalToken: "t".repeat(32),
+    modelId: "gpt-5.5",
+    parentDirectory: "/workspace",
+    pollIntervalMs: 1_000,
+    sessionTimeoutMs: 5_000,
+    fetchImpl: async (url) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname.endsWith("/message")) {
+        messageReads += 1;
+        return Response.json(messageReads === 1 ? [] : [
+          { info: { id: "msg_user_new", role: "user" }, parts: [] },
+        ]);
+      }
+      if (pathname.endsWith("/prompt_async")) return new Response(null, { status: 204 });
+      if (pathname === "/session/status") return Response.json({ ses_child_12345678: { type: "busy" } });
+      throw new Error(`Unexpected request: ${pathname}`);
+    },
+  });
+
+  const running = client.continueSession({
+    sessionId: "ses_child_12345678",
+    directory: "/workspace",
+    prompt: "Work",
+    signal: controller.signal,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+
+  await assert.rejects(running, /interrupted/i);
 });

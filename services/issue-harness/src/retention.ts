@@ -10,6 +10,11 @@ type CleanupExpiredWorkspacesOptions = {
   retentionMs: number;
 };
 
+type CleanupPrunedFinishedWorkspacesOptions = {
+  dataDir: string;
+  states: IssueRunState[];
+};
+
 export async function cleanupExpiredWorkspaces(options: CleanupExpiredWorkspacesOptions) {
   if (!Number.isSafeInteger(options.retentionMs) || options.retentionMs < 1) {
     throw new Error("Workspace retention must be a positive integer number of milliseconds");
@@ -36,6 +41,25 @@ export async function cleanupExpiredWorkspaces(options: CleanupExpiredWorkspaces
       const candidate = path.join(issueRoot, entry.name);
       if (candidate === currentWorkspace && !expiresCurrentWorkspace) continue;
       await fs.rm(candidate, { recursive: true, force: true });
+    }
+  }
+}
+
+export async function cleanupPrunedFinishedWorkspaces(options: CleanupPrunedFinishedWorkspacesOptions) {
+  const runsRoot = path.resolve(options.dataDir, "runs");
+  for (const run of options.states) {
+    if (run.status !== "finished") throw new Error("Only finished runs may be pruned from workspace storage");
+    const issueRoot = path.join(runsRoot, `issue-${run.issueNumber}`);
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(issueRoot, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^run-[A-Za-z0-9_-]+$/.test(entry.name)) continue;
+      await fs.rm(path.join(issueRoot, entry.name), { recursive: true, force: true });
     }
   }
 }

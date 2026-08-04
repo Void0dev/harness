@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -33,11 +34,15 @@ export async function prepareProjectWorkspace(options: ProjectWorkspaceOptions) 
     await git(parent, options.gitEnv, "clone", "--single-branch", "--branch", options.baseBranch, options.remoteUrl, contextDir);
   }
 
-  await git(contextDir, options.gitEnv, "fetch", "--prune", "origin", options.baseBranch);
-  await git(contextDir, options.gitEnv, "config", "core.hooksPath", path.join(contextDir, ".git", "disabled-hooks"));
-  await git(contextDir, options.gitEnv, "config", "core.sharedRepository", "group");
-  await git(contextDir, options.gitEnv, "config", "user.name", "OpenCode");
-  await git(contextDir, options.gitEnv, "config", "user.email", "opencode@users.noreply.github.com");
+  await writeTrustedGitConfig(contextDir, options.remoteUrl, options.baseBranch);
+  await git(
+    contextDir,
+    options.gitEnv,
+    "fetch",
+    "--prune",
+    options.remoteUrl,
+    `+refs/heads/${options.baseBranch}:refs/remotes/origin/${options.baseBranch}`,
+  );
 
   let branch = (await git(contextDir, options.gitEnv, "branch", "--show-current")).trim();
   const clean = (await git(contextDir, options.gitEnv, "status", "--porcelain=v1", "--untracked-files=all")).trim() === "";
@@ -74,19 +79,105 @@ export async function prepareProjectWorkspace(options: ProjectWorkspaceOptions) 
 }
 
 async function git(cwd: string, extraEnv: NodeJS.ProcessEnv | undefined, ...args: string[]) {
-  const result = await execFileAsync("git", args, {
+  const result = await execFileAsync("git", [
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "core.fsmonitor=false",
+    "-c", "diff.external=",
+    "-c", "credential.helper=",
+    "-c", "protocol.ext.allow=never",
+    ...args,
+  ], {
     cwd,
     encoding: "utf8",
-    timeout: 15_000,
+    timeout: 30_000,
+    killSignal: "SIGKILL",
     maxBuffer: 4 * 1024 * 1024,
     env: {
-      ...process.env,
+      PATH: extraEnv?.PATH ?? process.env.PATH ?? "/usr/bin:/bin",
+      HOME: "/dev/null",
+      XDG_CONFIG_HOME: "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_TERMINAL_PROMPT: "0",
-      ...extraEnv,
+      LANG: "C",
+      LC_ALL: "C",
+      ...allowlistedGitAuthEnvironment(extraEnv),
     },
   });
   return result.stdout;
+}
+
+async function writeTrustedGitConfig(contextDir: string, remoteUrl: string, baseBranch: string) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,239}$/.test(baseBranch) || baseBranch.includes("..")) {
+    throw new Error("Invalid context base branch");
+  }
+  const gitDirectory = path.join(contextDir, ".git");
+  const gitStat = await fs.lstat(gitDirectory);
+  if (!gitStat.isDirectory() || gitStat.isSymbolicLink()) {
+    throw new Error("Context checkout Git directory must be a real directory");
+  }
+  const configPath = path.join(gitDirectory, "config");
+  const currentBranch = await currentBranchFromHead(gitDirectory);
+  const branches = new Set([baseBranch, ...(currentBranch ? [currentBranch] : [])]);
+  const branchConfig = [...branches].map((branch) => [
+    `[branch ${quoteGitConfig(branch)}]`,
+    "\tremote = origin",
+    `\tmerge = refs/heads/${branch}`,
+  ].join("\n")).join("\n");
+  const content = [
+    "[core]",
+    "\trepositoryformatversion = 0",
+    "\tfilemode = true",
+    "\tbare = false",
+    "\tlogallrefupdates = true",
+    `\thooksPath = ${quoteGitConfig(path.join(gitDirectory, "disabled-hooks"))}`,
+    "\tsharedRepository = group",
+    '[remote "origin"]',
+    `\turl = ${quoteGitConfig(remoteUrl)}`,
+    "\tfetch = +refs/heads/*:refs/remotes/origin/*",
+    branchConfig,
+    "[user]",
+    "\tname = OpenCode",
+    "\temail = opencode@users.noreply.github.com",
+    "",
+  ].join("\n");
+  const temporary = path.join(gitDirectory, `config.${process.pid}.${randomUUID()}.tmp`);
+  await fs.writeFile(temporary, content, { flag: "wx", mode: 0o640 });
+  await fs.rename(temporary, configPath);
+}
+
+async function currentBranchFromHead(gitDirectory: string) {
+  const head = (await fs.readFile(path.join(gitDirectory, "HEAD"), "utf8")).trim();
+  const prefix = "ref: refs/heads/";
+  if (!head.startsWith(prefix)) return undefined;
+  const branch = head.slice(prefix.length);
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,239}$/.test(branch) && !branch.includes("..")
+    ? branch
+    : undefined;
+}
+
+function quoteGitConfig(value: string) {
+  if (/\r|\n|\0/.test(value)) throw new Error("Invalid Git configuration value");
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function allowlistedGitAuthEnvironment(extraEnv: NodeJS.ProcessEnv | undefined) {
+  if (!extraEnv?.GIT_CONFIG_COUNT) return {};
+  if (!/^\d+$/.test(extraEnv.GIT_CONFIG_COUNT)) throw new Error("Invalid Git auth configuration count");
+  const allowed: NodeJS.ProcessEnv = { GIT_CONFIG_COUNT: extraEnv.GIT_CONFIG_COUNT };
+  for (let index = 0; index < Number(extraEnv.GIT_CONFIG_COUNT); index += 1) {
+    const keyName = `GIT_CONFIG_KEY_${index}`;
+    const valueName = `GIT_CONFIG_VALUE_${index}`;
+    const key = extraEnv[keyName];
+    const value = extraEnv[valueName];
+    if (!key || value === undefined || !key.startsWith("http.https://github.com/")) {
+      throw new Error("Invalid Git auth configuration entry");
+    }
+    allowed[keyName] = key;
+    allowed[valueName] = value;
+  }
+  return allowed;
 }
 
 async function assertNotSymlink(directory: string) {

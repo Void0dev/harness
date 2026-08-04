@@ -62,6 +62,7 @@ export async function completeAgentSession(options: {
   prompt: string;
   client?: OpenCodeClient;
   onProgress?: (parts: unknown[]) => void | Promise<void>;
+  signal?: AbortSignal;
 }) {
   const client = options.client ?? defaultClient();
   const result = await client.continueSession({
@@ -69,6 +70,7 @@ export async function completeAgentSession(options: {
     directory: options.workspace,
     prompt: options.prompt,
     onProgress: options.onProgress,
+    signal: options.signal,
   });
   return finalizeAgentResponse({ ...options, ...result, stdout: result.text, client });
 }
@@ -82,6 +84,7 @@ export async function resumeAgentSession(options: {
   humanReply: string;
   client?: OpenCodeClient;
   onProgress?: (parts: unknown[]) => void | Promise<void>;
+  signal?: AbortSignal;
 }) {
   return completeAgentSession({
     ...options,
@@ -131,7 +134,10 @@ async function changedFileViews(
 ) {
   const result = await execFileAsync("git", [
     "-c", "core.hooksPath=/dev/null",
-    "diff", "--numstat", "--no-renames", options.baseSha, options.branch, "--",
+    "-c", "core.fsmonitor=false",
+    "-c", "diff.external=",
+    "diff", "--numstat", "--no-renames", "--no-ext-diff", "--no-textconv",
+    options.baseSha, options.branch, "--",
   ], {
     cwd: options.workspace,
     env: {
@@ -144,6 +150,8 @@ async function changedFileViews(
       LANG: "C",
       LC_ALL: "C",
     },
+    timeout: 30_000,
+    killSignal: "SIGKILL",
     maxBuffer: 2 * 1024 * 1024,
   });
   return parseChangedFileStats(result.stdout);
