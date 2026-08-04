@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { ensureSharedRuntimeDirectory } from "./security.js";
+import { ensureSharedRuntimeParentDirectory } from "./security.js";
 
 const execFileAsync = promisify(execFile);
 const githubName = /^[A-Za-z0-9_.-]+$/;
@@ -46,10 +46,9 @@ export async function prepareIsolatedExecutionWorkspace(
   assertSafeName("base branch", options.baseBranch);
 
   const runsRoot = path.resolve(options.dataDir, "runs", `issue-${options.issueNumber}`);
-  await ensureSharedRuntimeDirectory(path.resolve(options.dataDir, "runs"));
-  await ensureSharedRuntimeDirectory(runsRoot);
+  await ensureSharedRuntimeParentDirectory(path.resolve(options.dataDir, "runs"));
+  await ensureSharedRuntimeParentDirectory(runsRoot);
   const workspace = await fs.mkdtemp(path.join(runsRoot, "run-"));
-  await fs.chmod(workspace, 0o2770);
   await isolatedGit(
     path.dirname(workspace),
     options.gitEnv,
@@ -68,6 +67,7 @@ export async function prepareIsolatedExecutionWorkspace(
   await isolatedGit(workspace, undefined, "config", "user.name", "OpenCode Harness");
   await isolatedGit(workspace, undefined, "config", "user.email", "opencode-harness@users.noreply.github.com");
   const baseSha = await isolatedGit(workspace, undefined, "rev-parse", "HEAD");
+  await fs.chmod(workspace, 0o2770);
   return { workspace, baseSha };
 }
 

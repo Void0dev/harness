@@ -10,12 +10,15 @@ harden_harness_runtime() {
   local private_names=(
     state
   )
-  local shared_names=(
+  local shared_writable_names=(
     context
+  )
+  local shared_parent_names=(
     runs
   )
   local private_paths=()
-  local shared_paths=()
+  local shared_writable_paths=()
+  local shared_parent_paths=()
   local name
   local runtime_path
 
@@ -35,16 +38,27 @@ harden_harness_runtime() {
     private_paths+=("$runtime_path")
   done
 
-  for name in "${shared_names[@]}"; do
+  for name in "${shared_writable_names[@]}"; do
     runtime_path="$data_dir/$name"
     if [[ -L "$runtime_path" ]]; then
       echo "Refusing symbolic-link runtime directory: $name" >&2
       return 1
     fi
     mkdir -p -- "$runtime_path"
-    shared_paths+=("$runtime_path")
+    shared_writable_paths+=("$runtime_path")
+  done
+
+  for name in "${shared_parent_names[@]}"; do
+    runtime_path="$data_dir/$name"
+    if [[ -L "$runtime_path" ]]; then
+      echo "Refusing symbolic-link runtime directory: $name" >&2
+      return 1
+    fi
+    mkdir -p -- "$runtime_path"
+    shared_parent_paths+=("$runtime_path")
   done
 
   chmod 0700 "$data_dir" "${private_paths[@]}"
-  chmod 2770 "${shared_paths[@]}"
+  chmod 2770 "${shared_writable_paths[@]}"
+  chmod 2750 "${shared_parent_paths[@]}"
 }

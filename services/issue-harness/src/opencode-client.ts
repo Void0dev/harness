@@ -116,6 +116,7 @@ export class OpenCodeClient {
       options.directory,
       previousAssistantIds,
       previousUserIds,
+      options.prompt,
       options.onProgress,
       options.signal,
     );
@@ -157,6 +158,7 @@ export class OpenCodeClient {
     directory: string,
     previousAssistantIds: Set<string>,
     previousUserIds: Set<string>,
+    submittedPrompt: string,
     onProgress?: (parts: unknown[]) => void | Promise<void>,
     signal?: AbortSignal,
   ) {
@@ -172,23 +174,24 @@ export class OpenCodeClient {
           throw new Error("OpenCode returned an invalid session status");
         }
         const messages = await this.listMessages(sessionId, directory, signal);
-        const freshUserIds = new Set(messages.flatMap((message) =>
+        const submittedUsers = messages.filter((message) =>
           message.info?.role === "user"
           && typeof message.info.id === "string"
           && !previousUserIds.has(message.info.id)
-            ? [message.info.id]
-            : []));
-        if (freshUserIds.size === 0) {
+          && this.messageText(message) === submittedPrompt);
+        if (submittedUsers.length === 0) {
           lastTransientError = undefined;
           await abortableDelay(this.pollIntervalMs, signal);
           continue;
         }
+        if (submittedUsers.length !== 1) throw new Error("OpenCode returned an ambiguous submitted user turn");
+        const submittedUserId = submittedUsers[0]?.info?.id;
+        if (typeof submittedUserId !== "string") throw new Error("OpenCode returned an invalid submitted user turn");
         const freshAssistants = messages.filter((message) =>
           message.info?.role === "assistant"
           && typeof message.info.id === "string"
           && !previousAssistantIds.has(message.info.id)
-          && typeof message.info.parentID === "string"
-          && freshUserIds.has(message.info.parentID));
+          && message.info.parentID === submittedUserId);
         if (onProgress) {
           for (const message of freshAssistants) {
             const parts = Array.isArray(message.parts) ? message.parts : [];

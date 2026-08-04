@@ -11,6 +11,10 @@ export async function ensureSharedRuntimeDirectory(directory: string) {
   await ensureRuntimeDirectory(directory, 0o2770);
 }
 
+export async function ensureSharedRuntimeParentDirectory(directory: string) {
+  await ensureRuntimeDirectory(directory, 0o2750);
+}
+
 async function ensureRuntimeDirectory(directory: string, mode: number) {
   const expected = path.resolve(directory);
   await fs.mkdir(expected, { recursive: true, mode });
@@ -83,8 +87,8 @@ export async function acquireProcessLock(dataDir: string) {
       process.once("exit", releaseOnExit);
       return {
         release: async () => {
-          process.removeListener("exit", releaseOnExit);
           await release();
+          process.removeListener("exit", releaseOnExit);
         },
       };
     } catch (error) {

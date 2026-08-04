@@ -73,7 +73,7 @@ test("creates an execution clone with independent Git metadata and a credential-
   assert.equal(await worktreeIsClean(execution.workspace), true);
   await fs.writeFile(path.join(execution.workspace, "untracked.txt"), "pending\n");
   assert.equal(await worktreeIsClean(execution.workspace), false);
-  assert.equal((await fs.stat(runsRoot)).mode & 0o7777, 0o2770);
+  assert.equal((await fs.stat(runsRoot)).mode & 0o7777, 0o2750);
   assert.equal((await fs.stat(execution.workspace)).mode & 0o7777, 0o2770);
   assert.equal(await fs.readFile(path.join(execution.workspace, "version.txt"), "utf8"), "v1\n");
   await assert.rejects(fs.access(hookSentinel));

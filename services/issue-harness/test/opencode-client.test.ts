@@ -384,7 +384,7 @@ test("accepts a completed response when OpenCode removes the idle session from i
     modelId: "gpt-5.5",
     parentDirectory: "/workspace",
     pollIntervalMs: 0,
-    sessionTimeoutMs: 20,
+    sessionTimeoutMs: 5_000,
     fetchImpl: async (url) => {
       const pathname = new URL(String(url)).pathname;
       if (pathname.endsWith("/message")) {
@@ -455,4 +455,82 @@ test("stops session polling when the runtime abort signal fires", async () => {
   controller.abort();
 
   await assert.rejects(running, /interrupted/i);
+});
+
+test("returns only the assistant response for the exact submitted user turn", async () => {
+  let messageReads = 0;
+  const client = new OpenCodeClient({
+    baseUrl: "http://opencode-web:4096",
+    internalToken: "t".repeat(32),
+    modelId: "gpt-5.5",
+    parentDirectory: "/workspace",
+    pollIntervalMs: 0,
+    sessionTimeoutMs: 5_000,
+    fetchImpl: async (url) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname.endsWith("/message")) {
+        messageReads += 1;
+        if (messageReads === 1) return Response.json([]);
+        return Response.json([
+          { info: { id: "msg_user_ours", role: "user" }, parts: [{ type: "text", text: "Our prompt" }] },
+          { info: { id: "msg_user_other", role: "user" }, parts: [{ type: "text", text: "Other prompt" }] },
+          {
+            info: { id: "msg_assistant_ours", role: "assistant", parentID: "msg_user_ours", time: { completed: 2_000 } },
+            parts: [{ type: "text", text: "Our result <promise>COMPLETE</promise>" }],
+          },
+          {
+            info: { id: "msg_assistant_other", role: "assistant", parentID: "msg_user_other", time: { completed: 2_100 } },
+            parts: [{ type: "text", text: "Unrelated result" }],
+          },
+        ]);
+      }
+      if (pathname.endsWith("/prompt_async")) return new Response(null, { status: 204 });
+      if (pathname === "/session/status") return Response.json({});
+      throw new Error(`Unexpected request: ${pathname}`);
+    },
+  });
+
+  const result = await client.continueSession({
+    sessionId: "ses_child_12345678",
+    directory: "/workspace",
+    prompt: "Our prompt",
+  });
+
+  assert.equal(result.text, "Our result <promise>COMPLETE</promise>");
+});
+
+test("fails closed when multiple new user turns duplicate the submitted prompt", async () => {
+  let messageReads = 0;
+  const client = new OpenCodeClient({
+    baseUrl: "http://opencode-web:4096",
+    internalToken: "t".repeat(32),
+    modelId: "gpt-5.5",
+    parentDirectory: "/workspace",
+    pollIntervalMs: 0,
+    sessionTimeoutMs: 5_000,
+    fetchImpl: async (url) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname.endsWith("/message")) {
+        messageReads += 1;
+        if (messageReads === 1) return Response.json([]);
+        return Response.json([
+          { info: { id: "msg_user_first", role: "user" }, parts: [{ type: "text", text: "Same prompt" }] },
+          { info: { id: "msg_user_second", role: "user" }, parts: [{ type: "text", text: "Same prompt" }] },
+          {
+            info: { id: "msg_assistant_first", role: "assistant", parentID: "msg_user_first", time: { completed: 2_000 } },
+            parts: [{ type: "text", text: "Potentially unrelated result" }],
+          },
+        ]);
+      }
+      if (pathname.endsWith("/prompt_async")) return new Response(null, { status: 204 });
+      if (pathname === "/session/status") return Response.json({});
+      throw new Error(`Unexpected request: ${pathname}`);
+    },
+  });
+
+  await assert.rejects(client.continueSession({
+    sessionId: "ses_child_12345678",
+    directory: "/workspace",
+    prompt: "Same prompt",
+  }), /ambiguous submitted user turn/);
 });

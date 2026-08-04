@@ -834,12 +834,16 @@ async function main() {
   }, 60 * 60 * 1000);
   const shutdown = async (signal: string) => {
     console.log(`Issue harness stopping after ${signal}`);
+    const forcedExit = setTimeout(() => {
+      console.error("Issue harness shutdown grace period expired; forcing process exit");
+      process.exit(process.exitCode ?? 0);
+    }, 10_000);
     try {
       const result = await runtime.stop(processLock.release, 10_000);
       if (result === "timed-out") {
-        console.error("Issue harness shutdown grace period expired; forcing process exit");
-        process.exit(0);
+        return;
       }
+      clearTimeout(forcedExit);
     } catch (error) {
       console.error("Issue harness shutdown failed", error);
       process.exitCode = 1;

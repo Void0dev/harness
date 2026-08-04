@@ -86,3 +86,41 @@ test("removes recent workspaces for finished runs pruned from durable history", 
   await assert.rejects(fs.access(workspace));
   await fs.access(outside);
 });
+
+test("never follows a symlinked issue root during cleanup", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "issue-harness-retention-symlink-"));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const runsRoot = path.join(dataDir, "runs");
+  const outside = path.join(dataDir, "outside");
+  const victim = path.join(outside, "run-victim");
+  await fs.mkdir(victim, { recursive: true });
+  await fs.mkdir(runsRoot, { recursive: true });
+  await fs.symlink(outside, path.join(runsRoot, "issue-57"), "dir");
+
+  await cleanupExpiredWorkspaces({
+    dataDir,
+    now: new Date("2026-07-30T00:00:00.000Z"),
+    retentionMs: 1,
+    states: [run({ workspace: path.join(runsRoot, "issue-57", "run-victim") })],
+  });
+
+  await fs.access(victim);
+});
+
+test("never follows a symlinked issue root while pruning finished history", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "issue-harness-retention-pruned-symlink-"));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const runsRoot = path.join(dataDir, "runs");
+  const outside = path.join(dataDir, "outside");
+  const victim = path.join(outside, "run-victim");
+  await fs.mkdir(victim, { recursive: true });
+  await fs.mkdir(runsRoot, { recursive: true });
+  await fs.symlink(outside, path.join(runsRoot, "issue-57"), "dir");
+
+  await cleanupPrunedFinishedWorkspaces({
+    dataDir,
+    states: [run({ workspace: path.join(runsRoot, "issue-57", "run-victim") })],
+  });
+
+  await fs.access(victim);
+});

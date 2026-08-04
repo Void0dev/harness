@@ -52,6 +52,7 @@ export class HarnessRuntime {
     this.stopping = true;
     this.abortController.abort();
     this.stopPromise = (async () => {
+      const deadline = Date.now() + graceMs;
       for (const timer of this.intervals) clearInterval(timer);
       this.intervals.clear();
       const graceful = (async () => {
@@ -59,20 +60,23 @@ export class HarnessRuntime {
         this.servers.clear();
         await this.active;
       })();
-      const outcome = await settleWithin(graceful, graceMs);
+      const outcome = await settleWithin(graceful, remainingTime(deadline));
       if (outcome.kind === "timed-out") graceful.catch(() => undefined);
-      let releaseFailure: unknown;
-      try {
-        await release?.();
-      } catch (error) {
-        releaseFailure = error;
-      }
+      const releasing = Promise.resolve().then(async () => { await release?.(); });
+      const releaseOutcome = await settleWithin(releasing, remainingTime(deadline));
+      if (releaseOutcome.kind === "timed-out") releasing.catch(() => undefined);
       if (outcome.kind === "failed") throw outcome.error;
-      if (releaseFailure) throw releaseFailure;
-      return outcome.kind;
+      if (releaseOutcome.kind === "failed") throw releaseOutcome.error;
+      return outcome.kind === "timed-out" || releaseOutcome.kind === "timed-out"
+        ? "timed-out"
+        : "graceful";
     })();
     return this.stopPromise;
   }
+}
+
+function remainingTime(deadline: number) {
+  return Math.max(0, deadline - Date.now());
 }
 
 function settleWithin(operation: Promise<void>, milliseconds: number) {

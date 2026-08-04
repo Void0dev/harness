@@ -82,3 +82,14 @@ test("aborts active work and returns after the shutdown grace period", async () 
   assert.equal(released, true);
   void work;
 });
+
+test("includes process-lock release in the shutdown grace period", async () => {
+  const runtime = new HarnessRuntime();
+  const stopping = runtime.stop(async () => new Promise<void>(() => {}), 5);
+  const result = await Promise.race([
+    stopping,
+    new Promise<"outer-timeout">((resolve) => setTimeout(() => resolve("outer-timeout"), 100)),
+  ]);
+
+  assert.equal(result, "timed-out");
+});
