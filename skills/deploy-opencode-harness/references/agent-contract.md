@@ -47,7 +47,7 @@ Both services receive the same repository-scoped GitHub App ID, Installation ID,
 - Server and deployment credentials never enter Harness coding sessions.
 - The coding agent works in the isolated checkout, creates its own commit, pushes `opencode/issue-*` with `harness-github git`, and creates or reuses a draft PR into `stage` with `harness-github gh`.
 - Normal Issue processing always stops at that draft PR. Authenticated `/merge stage`, `/merge stage #<issue>`, or `/merge prod` runs as an ordinary command prompt in the same standard OpenCode `build` agent, which reads current GitHub state and performs the requested operation with `gh`. Production is always a `stage -> main` pull request.
-- Agent configuration does not prevent GitHub operations. Release App permissions and GitHub rulesets are the authority for allowed push and merge actions.
+- Agent configuration does not prevent GitHub operations. Release App permissions always bound GitHub access. In `protected-rulesets`, GitHub rulesets additionally enforce branch updates and merges. In `unprotected-degraded`, no server-side branch protection is claimed and the PR topology is trust-based.
 
 ## Operational endpoints
 

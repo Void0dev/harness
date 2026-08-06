@@ -159,6 +159,7 @@ class SkillContractTest(unittest.TestCase):
             "branches-verified",
             "awaiting-ruleset-authority",
             "rulesets-verified",
+            "branch-policy-resolved",
             "deployed",
             "verified",
             "reported",
@@ -166,6 +167,16 @@ class SkillContractTest(unittest.TestCase):
             self.assertIn(phase, skill)
         self.assertIn("Never call DELETE", skill)
         self.assertIn("никогда не reset/clean local branch", skill)
+
+    def test_skill_supports_private_repositories_without_github_team(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("GitHub Team/Pro не является prerequisite", skill)
+        self.assertIn("protected-rulesets", skill)
+        self.assertIn("unprotected-degraded", skill)
+        self.assertIn("rulesets_feature_unavailable_private_plan", skill)
+        self.assertIn("branch-policy-resolved", skill)
+        self.assertIn("Installation продолжается", skill)
 
     def test_skill_renders_the_runtime_only_model_key_config(self):
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")

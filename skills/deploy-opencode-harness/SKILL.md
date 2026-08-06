@@ -20,7 +20,8 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 - Обычный Issue flow всегда заканчивается draft PR в `stage`. Никакой текст модели, label, успешная проверка или таймер не запускает merge автоматически.
 - `/merge stage`, `/merge stage #<issue>` и `/merge prod` — command prompts для того же standard OpenCode `build` agent. Harness не создаёт отдельную release role и не выполняет merge in-process.
 - `/merge prod` всегда создаёт или переиспользует PR `stage -> main`; feature branch никогда не мержится прямо в `main`.
-- Возможность push или merge определяется только Release App permissions и GitHub rulesets; OpenCode agent permissions не являются security boundary.
+- Возможность push или merge определяется Release App permissions и, когда они доступны, GitHub rulesets; OpenCode agent permissions не являются security boundary.
+- GitHub Team/Pro не является prerequisite: Harness обязан устанавливаться и на private repository без платных Rulesets, но installer явно фиксирует более слабую branch-integrity гарантию.
 
 ## Phase 1: discover access
 
@@ -67,8 +68,11 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 
 1. Запусти `scripts/github_branches.py`: `main` обязан существовать. Если `stage` отсутствует, создай её ровно на текущем SHA `main`. Существующую `stage` никогда не reset, force-push, delete или replace.
 2. Release App не получает Administration permission. Для namespaced rulesets используй отдельную temporary bootstrap authority или owner action.
-3. Запусти plan/apply/read-back через `scripts/github_rulesets.py` для `harness-stage` и `harness-production`. Не ослабляй unrelated rulesets, reviews или checks. Если bootstrap authority отсутствует, выдай exact minimal owner instructions и сохрани phase `awaiting-ruleset-authority`.
-4. Installation не продолжается до verified read-back, подтверждающего active rulesets и отсутствие unrestricted Release App bypass.
+3. Разреши один из двух branch-policy modes и сохрани его в metadata `branch_policy_mode`:
+   - `protected-rulesets`: запусти plan/apply/read-back через `scripts/github_rulesets.py` для `harness-stage` и `harness-production`; не ослабляй unrelated rulesets, reviews или checks; после verified read-back переведи state через `rulesets-verified` в `branch-policy-resolved`;
+   - `unprotected-degraded`: только если GitHub Rulesets API для private repository вернул `403` или `404` с явным plan/upgrade/feature-unavailable объяснением, сохрани `last_error_code=rulesets_feature_unavailable_private_plan`, не пытайся повторно mutate rulesets и переведи state в `branch-policy-resolved`.
+4. Если bootstrap authority просто отсутствует или API error не доказан как plan limitation, выдай exact minimal owner instructions и сохрани phase `awaiting-ruleset-authority`; ambiguous `403/404` не ослабляет policy автоматически.
+5. В `unprotected-degraded` Installation продолжается без GitHub Team/Pro. Явно сообщи, что `main` и `stage` не защищены server-side: Release App с `Contents: write` технически может писать в них, а соблюдение PR topology обеспечивается contract/trust, не GitHub enforcement.
 
 ## Phase 4: deploy or reconcile
 
@@ -89,7 +93,7 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 - private `opencode-runtime` не имеет public route и принимает только internal bearer от Harness;
 - `/live`, `/ready`, `/health/worker` и token-protected `/identity` соответствуют ожидаемому repository;
 - Release App видит только target repository и имеет точный permission floor без Administration;
-- `main`, `stage`, `harness-stage` и `harness-production` verified read-back совпадают с desired state;
+- `main` и `stage` существуют, а `branch_policy_mode` совпадает с фактическим режимом; для `protected-rulesets` также проверь `harness-stage` и `harness-production` read-back, для `unprotected-degraded` повторно подтверди plan limitation и отсутствие заявлений о server-side protection;
 - standard OpenCode agent открывается в persistent writable checkout target repository и имеет edit/bash/GitHub tools;
 - coding agent создаёт commit, push и draft PR в `stage` самостоятельно;
 - `/merge` выполняется standard OpenCode `build` agent через `gh`; Harness не выполняет merge in-process;
@@ -100,7 +104,7 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 
 ## Resume invariants
 
-- Resume from the latest persisted non-secret phase: `preflight`, `awaiting-github-app`, `github-app-verified`, `branches-verified`, `awaiting-ruleset-authority`, `rulesets-verified`, `deployed`, `verified`, `reported`.
+- Resume from the latest persisted non-secret phase: `preflight`, `awaiting-github-app`, `github-app-verified`, `branches-verified`, `awaiting-ruleset-authority`, `rulesets-verified`, `branch-policy-resolved`, `deployed`, `verified`, `reported`.
 - Re-discover remote state before each mutation and bind only to the same repository and deterministic Harness identity.
 - Completed idempotent steps are no-op unless observed evidence disappeared.
 - После финального ответа удали local one-time web credential envelope и переведи state в `reported`.
@@ -108,7 +112,7 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 ## Idempotence invariants
 
 - Одинаковые inputs reconcile the same Harness; uncertain response не является причиной создать второй.
-- Branch creation, ruleset apply, secret generation и service creation выполняются at most once per desired-state digest.
+- Branch creation, ruleset apply, branch-policy resolution, secret generation и service creation выполняются at most once per desired-state digest.
 - Repeated `/merge` requests require the standard OpenCode agent to re-read current GitHub state with `gh` and treat an already completed operation as a no-op.
 - Never call DELETE. Repair compatible drift or stop on incompatible ownership.
 
@@ -116,6 +120,7 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 
 - Never print, log, commit, persist or echo PEM, server credentials, bootstrap authority, installation token, model key, internal tokens or secret-bearing API bodies.
 - Repository-scoped GitHub App credentials доступны обоим сервисам; web authority остаётся только в `harness`, а model key и OpenCode database — только в `opencode-runtime`.
+- В `unprotected-degraded` не называй `main` или `stage` защищёнными: branch integrity зависит от ограниченного App scope и следования operational contract.
 - Harness и runtime используют distinct UID/PID namespaces; общий GID разрешён только для setgid `context` и `runs`.
 - Project workspace доступен runtime на запись; Harness никогда не reset/clean local branch или uncommitted changes. Private Harness state остаётся `0700`; no Docker socket or privileged mode.
 - Final output contains no verification evidence, App metadata or infrastructure credentials.
