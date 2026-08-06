@@ -236,6 +236,15 @@ class SkillContractTest(unittest.TestCase):
         self.assertNotIn("verify_agent.py", release)
         self.assertNotIn("inventory", release.lower())
 
+    def test_image_publish_workflow_keeps_canonical_packages_public(self):
+        workflow = (ROOT / ".github" / "workflows" / "publish-images.yml").read_text()
+        release = (SKILL / "references" / "image-release.md").read_text()
+
+        self.assertIn("Ensure canonical package is public", workflow)
+        self.assertIn("/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/", workflow)
+        self.assertIn("visibility=public", workflow)
+        self.assertIn("public GHCR packages", release)
+
 
 if __name__ == "__main__":
     unittest.main()
