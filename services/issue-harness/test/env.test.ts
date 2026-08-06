@@ -56,8 +56,9 @@ test("accepts the direct OpenCode server configuration without sandbox variables
   await load(baseEnv);
 });
 
-test("requires bounded public web credentials and session settings", async () => {
-  await assert.rejects(load({ ...baseEnv, OPENCODE_SERVER_PASSWORD: "short" }), /at least 32/);
+test("accepts any non-empty public web password and keeps session settings bounded", async () => {
+  await load({ ...baseEnv, OPENCODE_SERVER_PASSWORD: "short" });
+  await assert.rejects(load({ ...baseEnv, OPENCODE_SERVER_PASSWORD: "" }), /Missing required environment variable/);
   await assert.rejects(load({ ...baseEnv, OPENCODE_SESSION_SECRET: "short" }), /at least 32/);
   await assert.rejects(load({ ...baseEnv, OPENCODE_PUBLIC_PORT: "80" }), /unprivileged port/);
   await assert.rejects(load({ ...baseEnv, OPENCODE_SESSION_TTL_SECONDS: "60" }), /between 86400/);

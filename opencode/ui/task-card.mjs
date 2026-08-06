@@ -1,5 +1,116 @@
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{8,128}$/;
 
+const GITHUB_PARENT_TITLE = /^GitHub Issue #\d+(?:\b|:)/i;
+const OPEN_CODE_TABS_STORAGE_KEY = "opencode.window.browser.dat:tabs";
+const GITHUB_TABS_MEMORY_KEY = "opencode.harness.github-issue-tabs.v1";
+
+export function appendBackgroundSessionTab(raw, sessionId) {
+  if (!SESSION_ID.test(sessionId)) return raw;
+  let tabs;
+  try { tabs = JSON.parse(raw); } catch { return raw; }
+  if (!Array.isArray(tabs)) return raw;
+  if (tabs.some((tab) => tab?.type === "session" && tab?.sessionId === sessionId)) return raw;
+  const server = tabs.find((tab) => tab?.type === "session" && typeof tab?.server === "string")?.server;
+  if (!server) return raw;
+  return JSON.stringify([...tabs, { type: "session", server, sessionId }]);
+}
+
+function canonicalGitHubIssueSessions(sessions) {
+  if (!Array.isArray(sessions)) return [];
+  const canonical = new Map();
+  for (const session of sessions) {
+    const match = /^GitHub Issue #(\d+)(?:\b|:)/i.exec(String(session?.title ?? ""));
+    const issueNumber = Number(match?.[1]);
+    if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0 || !SESSION_ID.test(String(session?.id ?? ""))) continue;
+    const createdValue = Number(session?.time?.created);
+    const candidate = {
+      issueNumber,
+      sessionId: String(session.id),
+      created: Number.isFinite(createdValue) ? createdValue : Number.MAX_SAFE_INTEGER,
+    };
+    const current = canonical.get(issueNumber);
+    if (!current || candidate.created < current.created
+      || (candidate.created === current.created && candidate.sessionId < current.sessionId)) {
+      canonical.set(issueNumber, candidate);
+    }
+  }
+  return [...canonical.values()].sort((left, right) => left.created - right.created || left.issueNumber - right.issueNumber);
+}
+
+function readGitHubTabMemory(raw) {
+  if (typeof raw !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.version !== 1 || !Array.isArray(parsed.repositories)) return undefined;
+    return {
+      version: 1,
+      repositories: parsed.repositories.flatMap((repository) => {
+        if (typeof repository?.scope !== "string" || !repository.scope || !Array.isArray(repository.issues)) return [];
+        const issues = [...new Set(repository.issues.filter((issue) => Number.isSafeInteger(issue) && issue > 0))].sort((a, b) => a - b);
+        return [{ scope: repository.scope, issues }];
+      }),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function synchronizeGitHubIssueTabs(rawTabs, rawMemory, scope, sessions) {
+  if (typeof scope !== "string" || !scope) return { tabs: rawTabs, memory: rawMemory };
+  if (!Array.isArray(sessions)) return { tabs: rawTabs, memory: rawMemory };
+  let tabs;
+  try { tabs = JSON.parse(rawTabs); } catch { return { tabs: rawTabs, memory: rawMemory }; }
+  if (!Array.isArray(tabs)) return { tabs: rawTabs, memory: rawMemory };
+  const canonical = canonicalGitHubIssueSessions(sessions);
+  const memory = readGitHubTabMemory(rawMemory);
+  if (!memory) {
+    return {
+      tabs: rawTabs,
+      memory: JSON.stringify({
+        version: 1,
+        repositories: [{ scope, issues: canonical.map(({ issueNumber }) => issueNumber).sort((a, b) => a - b) }],
+      }),
+    };
+  }
+
+  let repository = memory.repositories.find((candidate) => candidate.scope === scope);
+  if (!repository) {
+    repository = { scope, issues: canonical.map(({ issueNumber }) => issueNumber).sort((a, b) => a - b) };
+    memory.repositories.push(repository);
+    return { tabs: rawTabs, memory: JSON.stringify(memory) };
+  }
+
+  const knownIssues = new Set(repository.issues);
+  const server = tabs.find((tab) => tab?.type === "session" && typeof tab?.server === "string")?.server;
+  const nextTabs = [...tabs];
+  for (const candidate of canonical) {
+    if (knownIssues.has(candidate.issueNumber)) continue;
+    const alreadyOpen = tabs.some((tab) => tab?.type === "session" && tab?.sessionId === candidate.sessionId);
+    if (!alreadyOpen && !server) continue;
+    if (!alreadyOpen) nextTabs.push({ type: "session", server, sessionId: candidate.sessionId });
+    knownIssues.add(candidate.issueNumber);
+  }
+  repository.issues = [...knownIssues].sort((a, b) => a - b);
+  return { tabs: JSON.stringify(nextTabs), memory: JSON.stringify(memory) };
+}
+
+export function createBackgroundTabCoordinator() {
+  let previousSignature;
+  return {
+    shouldSynchronize(sessions) {
+      if (!Array.isArray(sessions)) return false;
+      const signature = JSON.stringify(sessions.map((session) => ({
+        id: session?.id,
+        title: session?.title,
+        created: session?.time?.created,
+      })).sort((left, right) => String(left.id ?? "").localeCompare(String(right.id ?? ""))));
+      if (signature === previousSignature) return false;
+      previousSignature = signature;
+      return true;
+    },
+  };
+}
+
 export function sessionIdFromPath(pathname) {
   const match = /\/session\/(ses_[A-Za-z0-9_-]{8,128})(?:\/)?$/.exec(pathname);
   return match && SESSION_ID.test(match[1]) ? match[1] : undefined;
@@ -44,6 +155,7 @@ export function createRefreshCoordinator() {
 }
 
 const refreshCoordinator = createRefreshCoordinator();
+const backgroundTabCoordinator = createBackgroundTabCoordinator();
 
 function applyNativeMessageFixes(metadata = { users: [] }) {
   const users = new Map((metadata.users ?? []).map((item) => [item.messageId, item]));
@@ -92,7 +204,45 @@ async function refresh({ restart = false } = {}) {
   }
 }
 
+async function addNewGitHubParentTab() {
+  if (document.visibilityState === "hidden") return;
+  try {
+    const response = await fetch("/__harness/api/github-parent-sessions", { headers: { Accept: "application/json" } });
+    const payload = response.ok ? await response.json() : {};
+    const sessions = payload?.sessions;
+    const scope = payload?.scope;
+    if (!Array.isArray(sessions) || typeof scope !== "string" || !scope) return;
+    if (!backgroundTabCoordinator.shouldSynchronize(sessions)) return;
+    const current = localStorage.getItem(OPEN_CODE_TABS_STORAGE_KEY);
+    if (!current) return;
+    const currentMemory = localStorage.getItem(GITHUB_TABS_MEMORY_KEY);
+    const synchronized = synchronizeGitHubIssueTabs(current, currentMemory, scope, sessions);
+    const next = synchronized.tabs;
+    if (next !== current) {
+      localStorage.setItem(OPEN_CODE_TABS_STORAGE_KEY, next);
+    }
+    if (synchronized.memory !== currentMemory) localStorage.setItem(GITHUB_TABS_MEMORY_KEY, synchronized.memory);
+    if (next !== current) {
+      try {
+        window.dispatchEvent(new StorageEvent("storage", {
+          key: OPEN_CODE_TABS_STORAGE_KEY,
+          oldValue: current,
+          newValue: next,
+          storageArea: localStorage,
+          url: location.href,
+        }));
+      } catch {
+        window.dispatchEvent(new Event("storage"));
+      }
+    }
+  } catch {
+    // The standard OpenCode stream remains the fallback if the session list is temporarily unavailable.
+  }
+}
+
 function boot() {
+  void addNewGitHubParentTab();
+  setInterval(() => void addNewGitHubParentTab(), 1_000);
   let scheduled = false;
   const observer = new MutationObserver(() => {
     applyNativeMessageFixes();

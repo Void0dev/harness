@@ -9,12 +9,15 @@ import { startHarnessProxyServer } from "./lib/harness-proxy-server.mjs";
 import { forwardHarnessProxy } from "./lib/harness-proxy.mjs";
 import { projectSessionMetadata } from "./lib/session-metadata.mjs";
 import { runtimeRequestAuthorized } from "./lib/runtime-auth.mjs";
-import { materializeCommandOutcome, materializeTaskMessages } from "./lib/native-task-message.mjs";
+import { materializeCommandOutcome, materializeGitHubIssueConversation, materializeTaskMessages } from "./lib/native-task-message.mjs";
 import { harnessCommandOutcome, nativeCommandPlan, persistThenDispatch } from "./lib/native-command.mjs";
 import {
   captureSessionMessageIds,
   createNativeEventHub,
   createSseForwarder,
+  findGitHubIssueParentSession,
+  listGitHubIssueParentSessions,
+  sessionCreatedEvent,
   sessionSnapshotEvents,
   taskCompletionEvents,
   terminalSessionIdleEvent,
@@ -24,6 +27,7 @@ const publicPort = Number.parseInt(process.env.OPENCODE_RUNTIME_PORT ?? process.
 const upstreamPort = Number.parseInt(process.env.OPENCODE_UPSTREAM_PORT ?? "4097", 10);
 const internalHarnessPort = Number.parseInt(process.env.OPENCODE_HARNESS_PROXY_PORT ?? "4098", 10);
 const projectDirectory = process.env.OPENCODE_PROJECT_DIR ?? "/home/opencode/workspace";
+const repositoryScope = `${process.env.GITHUB_OWNER ?? "unknown"}/${process.env.GITHUB_REPO ?? projectDirectory}`;
 const opencodeDatabasePath = process.env.OPENCODE_DATABASE_PATH ?? "/home/opencode/.local/share/opencode/opencode.db";
 const internalToken = process.env.OPENCODE_INTERNAL_TOKEN;
 const harnessCommandToken = process.env.HARNESS_COMMAND_TOKEN;
@@ -292,6 +296,134 @@ function serveAsset(response, bytes, contentType) {
   response.end(bytes);
 }
 
+
+function materializeTaskViews(parentSessionId, tasks) {
+  const previousMessageIds = captureSessionMessageIds(opencodeDatabasePath, parentSessionId);
+  const materialized = materializeTaskMessages({
+    dbPath: opencodeDatabasePath,
+    parentSessionId,
+    tasks,
+    projectDirectory,
+  });
+  if (materialized.changed) {
+    nativeEventHub.publish(taskCompletionEvents(
+      sessionSnapshotEvents(opencodeDatabasePath, parentSessionId, previousMessageIds),
+      parentSessionId,
+      tasks.length > 0 && tasks.every((task) => ["finished", "failed", "awaiting_human"].includes(task?.status)),
+    ));
+  }
+  return materialized;
+}
+
+async function createGitHubIssueConversation(request, response) {
+  let payload;
+  try {
+    payload = JSON.parse((await readRequestBody(request, 128 * 1024)).toString("utf8"));
+  } catch {
+    response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end('{"error":"invalid-request"}');
+    return;
+  }
+  const issueNumber = payload?.issueNumber;
+  const title = payload?.title;
+  const body = payload?.body;
+  const comments = payload?.comments;
+  const modelId = payload?.modelId;
+  if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0
+    || typeof title !== "string" || !title.trim() || title.length > 120
+    || typeof body !== "string" || body.length > 50_000
+    || typeof comments !== "string" || comments.length > 50_000
+    || typeof modelId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(modelId)) {
+    response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end('{"error":"invalid-request"}');
+    return;
+  }
+  try {
+    let parentSessionId = findGitHubIssueParentSession(opencodeDatabasePath, issueNumber, projectDirectory);
+    if (!parentSessionId) {
+      const createUrl = new URL("/session", `http://127.0.0.1:${upstreamPort}`);
+      createUrl.searchParams.set("directory", projectDirectory);
+      const created = await fetchBounded({
+        url: createUrl,
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: Buffer.from(JSON.stringify({ title: `GitHub Issue #${issueNumber}: ${title.trim()}` })),
+        timeoutMs: 10_000,
+        maximumBytes: 64 * 1024,
+      });
+      if (created.status < 200 || created.status >= 300) throw new Error("OpenCode parent session creation failed");
+      parentSessionId = JSON.parse(created.body.toString("utf8"))?.id;
+    }
+    if (typeof parentSessionId !== "string" || !/^ses_[A-Za-z0-9_-]{8,128}$/.test(parentSessionId)) {
+      throw new Error("OpenCode returned an invalid parent session");
+    }
+    const previousMessageIds = captureSessionMessageIds(opencodeDatabasePath, parentSessionId);
+    materializeGitHubIssueConversation({
+      dbPath: opencodeDatabasePath,
+      parentSessionId,
+      issue: { title: title.trim(), body, comments },
+      task: {
+        schemaVersion: 1,
+        issueNumber,
+        title: title.trim(),
+        status: "running",
+        stages: ["accepted"],
+        modelId,
+        updatedAt: new Date().toISOString(),
+      },
+      projectDirectory,
+    });
+    const createdEvent = sessionCreatedEvent(opencodeDatabasePath, parentSessionId);
+    nativeEventHub.publish([
+      ...(createdEvent ? [createdEvent] : []),
+      ...sessionSnapshotEvents(opencodeDatabasePath, parentSessionId, previousMessageIds),
+    ]);
+    const result = Buffer.from(JSON.stringify({ parentSessionId }));
+    response.writeHead(201, {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": String(result.length),
+      "cache-control": "no-store",
+    });
+    response.end(result);
+  } catch (error) {
+    console.error("GitHub Issue conversation creation failed", error);
+    response.writeHead(502, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end('{"error":"opencode-unavailable"}');
+  }
+}
+
+async function materializeInternalTaskView(request, response) {
+  let payload;
+  try {
+    payload = JSON.parse((await readRequestBody(request, 128 * 1024)).toString("utf8"));
+  } catch {
+    response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end('{"error":"invalid-request"}');
+    return;
+  }
+  const parentSessionId = payload?.parentSessionId;
+  const task = payload?.task;
+  if (!/^ses_[A-Za-z0-9_-]{8,128}$/.test(parentSessionId) || !task || typeof task !== "object") {
+    response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end('{"error":"invalid-request"}');
+    return;
+  }
+  try {
+    const materialized = materializeTaskViews(parentSessionId, [task]);
+    const body = Buffer.from(JSON.stringify({ materialized: materialized.changed }));
+    response.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": String(body.length),
+      "cache-control": "no-store",
+    });
+    response.end(body);
+  } catch (error) {
+    console.error("Harness task update materialization failed", error);
+    response.writeHead(502, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end('{"error":"opencode-unavailable"}');
+  }
+}
+
 async function proxyTaskViews(requestUrl, response) {
   const parentSessionId = requestUrl.searchParams.get("parentSessionId") ?? "";
   if (!/^ses_[A-Za-z0-9_-]{8,128}$/.test(parentSessionId)) {
@@ -409,6 +541,27 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === "GET" && url.pathname === "/__harness/api/session-metadata") {
     await proxySessionMetadata(url, response);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/__harness/api/github-parent-sessions") {
+    const body = Buffer.from(JSON.stringify({
+      scope: repositoryScope,
+      sessions: listGitHubIssueParentSessions(opencodeDatabasePath, projectDirectory),
+    }));
+    response.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": String(body.length),
+      "cache-control": "no-store",
+    });
+    response.end(body);
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/__harness/internal/github-issue-conversations") {
+    await createGitHubIssueConversation(request, response);
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/__harness/internal/task-messages") {
+    await materializeInternalTaskView(request, response);
     return;
   }
   if (request.method === "POST" && /^\/session\/ses_[A-Za-z0-9_-]{8,128}\/command$/.test(url.pathname)) {

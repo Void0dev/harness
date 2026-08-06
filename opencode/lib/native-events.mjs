@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 
 export function encodeNativeEvent(event) {
   return `data: ${JSON.stringify(event)}\n\n`;
@@ -63,6 +64,83 @@ export function captureSessionMessageIds(dbPath, sessionID) {
     return {
       messages: captureRows(db, "message", sessionID),
       parts: captureRows(db, "part", sessionID),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+export function findGitHubIssueParentSession(dbPath, issueNumber, directory) {
+  if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0 || typeof directory !== "string" || !directory) {
+    throw new Error("Invalid GitHub Issue parent-session lookup");
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const title = `GitHub Issue #${issueNumber}`;
+    return db.prepare(`
+      SELECT id FROM session
+      WHERE parent_id IS NULL AND directory = ?
+        AND (title = ? COLLATE NOCASE OR title LIKE ? COLLATE NOCASE)
+      ORDER BY time_created ASC, id ASC
+      LIMIT 1
+    `).get(directory, title, `${title}:%`)?.id;
+  } finally {
+    db.close();
+  }
+}
+
+export function listGitHubIssueParentSessions(dbPath, directory) {
+  if (typeof directory !== "string" || !directory) throw new Error("Invalid GitHub Issue session directory");
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    return db.prepare(`
+      SELECT id, title, time_created, time_updated FROM session
+      WHERE parent_id IS NULL AND directory = ? AND title LIKE 'GitHub Issue #%'
+      ORDER BY time_created ASC, id ASC
+    `).all(directory).flatMap((row) =>
+      /^GitHub Issue #\d+(?:\b|:)/i.test(String(row.title ?? ""))
+        ? [{ id: row.id, title: row.title, time: { created: row.time_created, updated: row.time_updated } }]
+        : []);
+  } finally {
+    db.close();
+  }
+}
+
+
+export function sessionCreatedEvent(dbPath, sessionID) {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const row = db.prepare(`
+      SELECT id, project_id, parent_id, slug, directory, path, title, version, cost,
+        tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
+        time_created, time_updated
+      FROM session WHERE id = ?
+    `).get(sessionID);
+    if (!row) return undefined;
+    return {
+      id: `evt_${randomUUID().replaceAll("-", "")}`,
+      type: "session.created",
+      properties: {
+        sessionID: row.id,
+        info: {
+          id: row.id,
+          projectID: row.project_id,
+          ...(row.parent_id ? { parentID: row.parent_id } : {}),
+          slug: row.slug,
+          directory: row.directory,
+          path: row.path,
+          title: row.title,
+          version: row.version,
+          cost: row.cost,
+          tokens: {
+            input: row.tokens_input,
+            output: row.tokens_output,
+            reasoning: row.tokens_reasoning,
+            cache: { read: row.tokens_cache_read, write: row.tokens_cache_write },
+          },
+          time: { created: row.time_created, updated: row.time_updated },
+        },
+      },
     };
   } finally {
     db.close();

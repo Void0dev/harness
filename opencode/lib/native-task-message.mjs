@@ -3,9 +3,15 @@ import { DatabaseSync } from "node:sqlite";
 
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{8,128}$/;
 
+function openWritableDatabase(dbPath) {
+  const db = new DatabaseSync(dbPath);
+  db.exec("PRAGMA busy_timeout = 1000");
+  return db;
+}
+
 export function materializeTaskMessages({ dbPath, parentSessionId, tasks, projectDirectory }) {
   if (!SESSION_ID.test(parentSessionId) || !Array.isArray(tasks)) throw new Error("Invalid task materialization request");
-  const db = new DatabaseSync(dbPath);
+  const db = openWritableDatabase(dbPath);
   try {
     db.exec("BEGIN IMMEDIATE");
     let changed = cleanupSyntheticCommandUsers(db, parentSessionId);
@@ -69,7 +75,7 @@ export function materializeCommandOutcome({
   if (!SESSION_ID.test(parentSessionId) || !/^msg_[A-Za-z0-9_-]{8,128}$/.test(messageID)) {
     throw new Error("Invalid command materialization request");
   }
-  const db = new DatabaseSync(dbPath);
+  const db = openWritableDatabase(dbPath);
   try {
     db.exec("BEGIN IMMEDIATE");
     const row = db.prepare(`
@@ -110,6 +116,27 @@ export function materializeCommandOutcome({
     }
     if (reply) changed = upsertCommandReply(db, row, reply, {}, projectDirectory, updatedAt) || changed;
     if (changed) db.prepare("UPDATE session SET time_updated = ? WHERE id = ?").run(updatedAt, parentSessionId);
+    db.exec("COMMIT");
+    return { changed };
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
+
+export function materializeGitHubIssueConversation({ dbPath, parentSessionId, issue, task, projectDirectory }) {
+  if (!SESSION_ID.test(parentSessionId) || !task || !Number.isSafeInteger(task.issueNumber) || task.issueNumber <= 0) {
+    throw new Error("Invalid GitHub Issue conversation request");
+  }
+  const db = openWritableDatabase(dbPath);
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    const initial = createGitHubIssueAnchor(db, parentSessionId, task, issue);
+    const taskChanged = materializeOne(db, parentSessionId, task, projectDirectory);
+    const changed = initial.changed || taskChanged;
     db.exec("COMMIT");
     return { changed };
   } catch (error) {
@@ -498,6 +525,7 @@ function anchorRank(text, issueNumber) {
   if (new RegExp(`^Issue #${escaped}:\\s*\\/issue(?:\\s|$)`, "i").test(text.trim())) return 30;
   if (new RegExp(`Повторный запуск Issue #${escaped} поставлен в очередь`, "i").test(text)) return 20;
   if (new RegExp(`^Issue #${escaped} принят`, "i").test(text.trim())) return 10;
+  if (new RegExp(`^GitHub Issue #${escaped}(?:\\b|:)`, "i").test(text.trim())) return 1;
   return 0;
 }
 
@@ -620,6 +648,41 @@ function legacySystemText(text, issueNumber) {
     `^Issue #${escaped}(?: принят\\.|: (?:пишу код|код подготовлен|код готов|выполнение остановилось))|^Issue #${escaped} готов\\.`,
     "i",
   ).test(text.trim());
+}
+
+
+function createGitHubIssueAnchor(db, sessionID, task, issue) {
+  const session = db.prepare("SELECT title FROM session WHERE id = ?").get(sessionID);
+  if (!session || !new RegExp(`^GitHub Issue #${task.issueNumber}(?:\\b|:)`, "i").test(session.title)) {
+    throw new Error("GitHub Issue parent session was not found");
+  }
+  const title = safeText(issue?.title, 120) ?? task.title;
+  const body = safeText(issue?.body, 50_000);
+  const comments = safeText(issue?.comments, 50_000);
+  const createdAt = validTime(task.updatedAt) ?? Date.now();
+  const suffix = crypto.createHash("sha256").update(`${sessionID}:${task.issueNumber}:user`).digest("hex").slice(0, 24);
+  const id = `msg_harness_user_${suffix}`;
+  const partID = `prt_harness_user_${suffix}`;
+  const text = [
+    `GitHub Issue #${task.issueNumber}: ${title}`,
+    ...(body ? [`Описание:\n${body}`] : []),
+    ...(comments ? [`Комментарии разработчиков:\n${comments}`] : []),
+  ].join("\n\n");
+  const data = {
+    role: "user",
+    time: { created: createdAt },
+    agent: "build",
+    model: { providerID: "void", modelID: safeText(task.modelId, 128) ?? "unknown" },
+    summary: { diffs: [] },
+  };
+  const messageChanged = upsertJson(db, "message", id, {
+    sessionID, createdAt, updatedAt: createdAt, data,
+  });
+  const partChanged = upsertJson(db, "part", partID, {
+    sessionID, messageID: id, createdAt, updatedAt: createdAt,
+    data: { type: "text", text },
+  });
+  return { id, createdAt, rank: 1, changed: messageChanged || partChanged };
 }
 
 function createDirectIssueAnchor(db, sessionID, task) {

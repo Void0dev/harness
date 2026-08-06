@@ -186,6 +186,84 @@ test("creates a standalone parent session for a GitHub-created Issue", async () 
   assert.deepEqual(observed, { title: "GitHub Issue #57: Fix login" });
 });
 
+test("creates a populated parent conversation for a GitHub-created Issue", async () => {
+  const observed: Array<{ url: string; body?: unknown }> = [];
+  const client = new OpenCodeClient({
+    baseUrl: "http://opencode-web:4096",
+    internalToken: "t".repeat(32),
+    modelId: "gpt-5.5",
+    parentDirectory: "/workspace",
+    fetchImpl: async (url, init) => {
+      observed.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return Response.json({ parentSessionId: "ses_parent_12345678" });
+    },
+  });
+
+  const sessionId = await client.createGitHubIssueConversation({
+    issueNumber: 57,
+    title: "Fix login",
+    body: "The login form accepts an empty email.",
+    comments: "@developer: Also validate the error text.",
+  });
+
+  assert.equal(sessionId, "ses_parent_12345678");
+  assert.equal(observed.length, 1);
+  assert.match(observed[0]?.url ?? "", /\/__harness\/internal\/github-issue-conversations\?directory=%2Fworkspace/);
+  assert.deepEqual(observed[0]?.body, {
+    issueNumber: 57,
+    title: "Fix login",
+    body: "The login form accepts an empty email.",
+    comments: "@developer: Also validate the error text.",
+    modelId: "gpt-5.5",
+  });
+});
+
+test("sends a worker task update to the parent conversation", async () => {
+  let observed: { url?: string; body?: unknown } = {};
+  const client = new OpenCodeClient({
+    baseUrl: "http://opencode-web:4096",
+    internalToken: "t".repeat(32),
+    modelId: "gpt-5.5",
+    parentDirectory: "/workspace",
+    fetchImpl: async (url, init) => {
+      observed = { url: String(url), body: JSON.parse(String(init?.body)) };
+      return Response.json({ materialized: true });
+    },
+  });
+  const task = {
+    schemaVersion: 1,
+    issueNumber: 57,
+    title: "Fix login",
+    status: "finished",
+    stages: ["accepted", "studying", "coding", "testing", "publishing"],
+    prUrl: "https://github.com/acme/repo/pull/57",
+    updatedAt: "2026-08-03T00:00:00.000Z",
+  };
+
+  await client.materializeTaskView("ses_parent_12345678", task);
+
+  assert.match(observed.url ?? "", /__harness\/internal\/task-messages/);
+  assert.deepEqual(observed.body, { parentSessionId: "ses_parent_12345678", task });
+});
+
+test("asks OpenCode Web to create an externally-created Issue conversation", async () => {
+  let observed = "";
+  const client = new OpenCodeClient({
+    baseUrl: "http://opencode-web:4096",
+    internalToken: "t".repeat(32),
+    modelId: "gpt-5.5",
+    parentDirectory: "/workspace",
+    fetchImpl: async (url) => {
+      observed = String(url);
+      return Response.json({ parentSessionId: "ses_parent_12345678" });
+    },
+  });
+
+  await client.createGitHubIssueConversation({ issueNumber: 58, title: "Fix logout", body: "", comments: "" });
+
+  assert.match(observed, /\/__harness\/internal\/github-issue-conversations\?directory=%2Fworkspace/);
+});
+
 test("reads the latest real generation metadata from an existing worker session", async () => {
   const client = new OpenCodeClient({
     baseUrl: "http://opencode-web:4096",

@@ -53,6 +53,17 @@ function openCodeForIssue(body: string | null | undefined) {
   });
 }
 
+
+async function persistRun(run: Omit<IssueRunState, "updatedAt">) {
+  await state.set(run);
+  if (!run.parentSessionId || !run.taskView) return;
+  try {
+    await openCode.materializeTaskView(run.parentSessionId, run.taskView);
+  } catch (error) {
+    console.error(`OpenCode task update failed for Issue #${run.issueNumber}`, error);
+  }
+}
+
 let tracker: GithubTracker;
 let getGitHubToken: () => Promise<string>;
 const scheduler = new RunScheduler<NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>>(
@@ -162,11 +173,16 @@ async function ensureParentSession(
   issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>,
   existing: IssueRunState | undefined,
   client: OpenCodeClient,
+  comments: string,
 ) {
   const linked = existing?.parentSessionId ?? parseParentSessionId(issue.body);
   if (linked) return linked;
-  const parentSessionId = await client.createParent({ title: `GitHub Issue #${issue.number}: ${issue.title}` });
-  return parentSessionId;
+  return client.createGitHubIssueConversation({
+    issueNumber: issue.number,
+    title: issue.title,
+    body: issue.body ?? "",
+    comments: comments.slice(-50_000),
+  });
 }
 
 async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker["nextIssue"]>>>) {
@@ -175,13 +191,14 @@ async function processIssue(issue: NonNullable<Awaited<ReturnType<GithubTracker[
   const issueOpenCode = openCodeForIssue(issue.body);
   let parentSessionId: string | undefined;
   try {
-    parentSessionId = await ensureParentSession(issue, existing, issueOpenCode);
+    const comments = await tracker.recentComments(issue.number);
+    parentSessionId = await ensureParentSession(issue, existing, issueOpenCode, comments);
   } catch (error) {
     console.error("OpenCode parent creation failed; Issue remains queued for retry", error);
     return;
   }
   if (!existing) {
-    await state.set(withTaskView({
+    await persistRun(withTaskView({
       issueNumber: issue.number,
       branch,
       status: "running",
@@ -222,7 +239,7 @@ async function startCoding(
   client: OpenCodeClient,
 ) {
   const initial = state.get(issue.number) ?? existing;
-  if (initial) await state.set(withTaskView(
+  if (initial) await persistRun(withTaskView(
     withoutTimestamp(initial),
     issue,
     { status: "running", stages: appendObservedStage(initial.taskView?.stages ?? ["accepted"], "studying") },
@@ -277,7 +294,7 @@ async function startCoding(
       stages: state.get(issue.number)?.taskView?.stages ?? ["accepted", "studying"],
       workerSessionPath: started.childSessionPath,
     });
-    await state.set(activeState);
+    await persistRun(activeState);
     await cleanupWorkspaceStorage();
     const result = await completeAgentSession({
       issue,
@@ -295,7 +312,7 @@ async function startCoding(
         const current = state.get(issue.number);
         if (!current) return;
         if (current.taskView?.stages.includes(observed)) return;
-        await state.set(withTaskView(withoutTimestamp(current), issue, {
+        await persistRun(withTaskView(withoutTimestamp(current), issue, {
           status: "running",
           stages: appendObservedStage(current.taskView?.stages ?? ["accepted"], observed),
         }));
@@ -338,7 +355,7 @@ async function resumeCoding(
     pendingHumanReply: undefined,
     awaitingAction: undefined,
   }, issue, { status: "running", question: undefined });
-  await state.set(activeState);
+  await persistRun(activeState);
   try {
     const result = await resumeAgentSession({
       issue,
@@ -356,7 +373,7 @@ async function resumeCoding(
         const current = state.get(issue.number);
         if (!current) return;
         if (current.taskView?.stages.includes(observed)) return;
-        await state.set(withTaskView(withoutTimestamp(current), issue, {
+        await persistRun(withTaskView(withoutTimestamp(current), issue, {
           status: "running",
           question: undefined,
           stages: appendObservedStage(current.taskView?.stages ?? ["accepted"], observed),
@@ -409,7 +426,7 @@ async function reconcilePublication(
     }, "Harness не смог подтвердить draft PR после перезапуска. Проверьте GitHub и отправьте /retry в этом чате.", "failed");
     return;
   }
-  await state.set(withTaskView({
+  await persistRun(withTaskView({
     ...withoutTimestamp(run),
     status: "finished",
     prUrl: pullRequest.url,
@@ -476,7 +493,7 @@ async function handleAgentResult(
     files: result.files,
     ...generationPatch(result),
   });
-  await state.set(verifying);
+  await persistRun(verifying);
   let pullRequest;
   try {
     pullRequest = await retryTransient(async () => {
@@ -500,7 +517,7 @@ async function handleAgentResult(
     }, "Агент завершил работу, но ожидаемый draft PR в stage не найден. Проверьте GitHub и отправьте /retry в этом чате, чтобы агент повторил публикацию.", "failed");
     return;
   }
-  await state.set(withTaskView({
+  await persistRun(withTaskView({
     ...verifying,
     status: "finished",
     prUrl: pullRequest.url,
@@ -551,7 +568,7 @@ async function waitForHuman(
   question: string,
   cardStatus: TaskStatus = "awaiting_human",
 ) {
-  await state.set(withTaskView(
+  await persistRun(withTaskView(
     {
       ...run,
       status: "awaiting_human",
@@ -627,7 +644,7 @@ async function reconcileHumanCommentReplies() {
 
 async function queueHumanReply(current: IssueRunState, text: string) {
   if (!acceptsHumanAnswer(current) || !current.awaitingAction) return null;
-  await state.set(withTaskView({
+  await persistRun(withTaskView({
     ...withoutTimestamp(current),
     status: "running",
     pendingHumanReply: text,
@@ -666,7 +683,7 @@ async function reconcilePersistedStates() {
       const migratedStages = run.status === "finished"
         ? ["accepted", "studying", "coding", "publishing"] as const
         : ["accepted", "studying"] as const;
-      await state.set(withTaskView(withoutTimestamp(run), {
+      await persistRun(withTaskView(withoutTimestamp(run), {
         number: run.issueNumber,
         title: `Issue #${run.issueNumber}`,
       }, {
@@ -718,7 +735,7 @@ async function reconcilePersistedStates() {
       continue;
     }
     const awaitingAction = run.lastSessionId && run.workspace && run.baseSha ? "resume_child" : "rerun";
-    await state.set(withTaskView({
+    await persistRun(withTaskView({
       ...withoutTimestamp(run),
       status: "awaiting_human",
       awaitingAction,
@@ -731,6 +748,18 @@ async function reconcilePersistedStates() {
       question: "Harness был перезапущен во время выполнения. Отправьте /retry, чтобы безопасно продолжить или перезапустить задачу.",
     }));
     await synchronizePersistedAttention(run.issueNumber, state.get(run.issueNumber)!);
+  }
+}
+
+
+async function syncPersistedTaskViews() {
+  for (const run of state.all()) {
+    if (!run.parentSessionId || !run.taskView) continue;
+    try {
+      await openCode.materializeTaskView(run.parentSessionId, run.taskView);
+    } catch (error) {
+      console.error(`OpenCode task update failed for Issue #${run.issueNumber}`, error);
+    }
   }
 }
 
@@ -748,6 +777,7 @@ async function main() {
   await tracker.assertRepositoryAccess();
   await tracker.ensureLabels();
   await reconcilePersistedStates();
+  await syncPersistedTaskViews();
   await cleanupWorkspaceStorage();
   await prepareProjectWorkspace();
   runtime.registerServer(await startHealthServer({
@@ -777,7 +807,7 @@ async function main() {
       if (!parentSessionId) throw new Error("Harness-created Issue is missing its parent session marker");
       const issue = { number: created.number, title: request.title, html_url: created.url };
       const claimed = state.get(created.number);
-      await state.set(withTaskView(
+      await persistRun(withTaskView(
         claimed ? withoutTimestamp(claimed) : {
           issueNumber: created.number,
           branch: branchName(created.number, request.title),
@@ -803,7 +833,7 @@ async function main() {
       if (instruction) {
         await tracker.comment(current.issueNumber, `Дополнительное указание для повторного запуска:\n\n${instruction}`);
       }
-      await state.set(withTaskView(retry, {
+      await persistRun(withTaskView(retry, {
         number: current.issueNumber,
         title: current.taskView?.title ?? `Issue #${current.issueNumber}`,
         html_url: current.taskView?.issueUrl,

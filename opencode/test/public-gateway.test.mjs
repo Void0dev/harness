@@ -32,7 +32,7 @@ test("public gateway rejects unauthenticated traffic and authenticates before pr
     port: 0,
     upstreamUrl: `http://127.0.0.1:${runtimePort}`,
     username: "developer",
-    password: "correct-password-that-is-long-enough",
+    password: "short",
     sessionSecret: "s".repeat(32),
     internalToken: "i".repeat(32),
     sessionTtlSeconds: 86_400,
@@ -52,7 +52,7 @@ test("public gateway rejects unauthenticated traffic and authenticates before pr
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       username: "developer",
-      password: "correct-password-that-is-long-enough",
+      password: "short",
       next: "/project/session",
     }),
   });
