@@ -52,13 +52,6 @@ jobs:
             SOURCE_REPOSITORY=https://github.com/${{ github.repository }}
             SOURCE_COMMIT=${{ github.sha }}
           tags: ghcr.io/${{ steps.names.outputs.owner }}/${{ matrix.image }}:${{ github.sha }}
-      - name: Ensure canonical package is public
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --method PATCH \
-            "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${{ matrix.image }}/visibility" \
-            -f visibility=public
       - name: Attest image subject and source
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
         with:

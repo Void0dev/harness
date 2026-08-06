@@ -9,6 +9,11 @@ Resolve both digests from one successful `Publish harness images` workflow run o
 
 Both canonical packages must be public so a repository-scoped target GitHub App never needs access to `Void0dev/harness` packages and the deployment host never stores a personal package token.
 
+GitHub exposes package visibility only through package settings. If either anonymous pull fails, an owner must open both links and set **Change package visibility → Public** before deployment continues:
+
+- https://github.com/orgs/Void0dev/packages/container/issue-harness/settings
+- https://github.com/orgs/Void0dev/packages/container/opencode-web/settings
+
 Verify each subject directly with GitHub CLI before deployment:
 
 ```text

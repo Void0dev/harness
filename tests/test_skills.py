@@ -236,14 +236,18 @@ class SkillContractTest(unittest.TestCase):
         self.assertNotIn("verify_agent.py", release)
         self.assertNotIn("inventory", release.lower())
 
-    def test_image_publish_workflow_keeps_canonical_packages_public(self):
+    def test_image_release_requires_public_canonical_packages(self):
         workflow = (ROOT / ".github" / "workflows" / "publish-images.yml").read_text()
         release = (SKILL / "references" / "image-release.md").read_text()
+        skill = (SKILL / "SKILL.md").read_text()
 
-        self.assertIn("Ensure canonical package is public", workflow)
-        self.assertIn("/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/", workflow)
-        self.assertIn("visibility=public", workflow)
+        self.assertNotIn("/visibility", workflow)
         self.assertIn("public GHCR packages", release)
+        for image in ("issue-harness", "opencode-web"):
+            url = f"https://github.com/orgs/Void0dev/packages/container/{image}/settings"
+            self.assertIn(url, release)
+            self.assertIn(url, skill)
+        self.assertIn("anonymous pull", skill)
 
 
 if __name__ == "__main__":

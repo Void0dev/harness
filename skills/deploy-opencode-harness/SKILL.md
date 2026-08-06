@@ -83,6 +83,7 @@ description: Install, repair, or resume one isolated OpenCode Harness for an exi
 5. Для Compose marker `__VOID_AI_API_KEY_AT_DEPLOY__` должен встречаться ровно один раз до render и ни разу после. replace the marker only in memory. Never store `VOID_AI_API_KEY` as a Service environment variable.
 6. Перед update сохрани last-known-good non-secret deployment description. При failed rollout восстанови её и останови failed revision. Never call DELETE.
 7. Persist resume state через `scripts/installer_state.py` с mode-equivalent `0700/0600`. Не сохраняй PEM, tokens, passwords, model key или one-time web credential envelope в state JSON.
+8. До rollout проверь anonymous pull обоих canonical GHCR digests. Если package private, остановись на manual registry checkpoint и дай обе точные Markdown-ссылки: `https://github.com/orgs/Void0dev/packages/container/issue-harness/settings` и `https://github.com/orgs/Void0dev/packages/container/opencode-web/settings`. Попроси owner выбрать **Change package visibility → Public**; не подменяй это PAT или package token на target server.
 
 ## Phase 5: verify
 
