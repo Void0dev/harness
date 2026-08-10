@@ -33,6 +33,13 @@ function strongSecret(value, name) {
   return value;
 }
 
+function requiredPassword(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("password must be non-empty");
+  }
+  return value;
+}
+
 function securityHeaders(response) {
   response.setHeader("cache-control", "no-store");
   response.setHeader("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
@@ -132,7 +139,7 @@ export async function startPublicGateway({
   sessionTtlSeconds = 86_400,
 }) {
   const upstream = parseUpstream(upstreamUrl);
-  const expectedPassword = strongSecret(password, "password");
+  const expectedPassword = requiredPassword(password);
   const signingSecret = strongSecret(sessionSecret, "sessionSecret");
   const runtimeToken = strongSecret(internalToken, "internalToken");
   if (typeof username !== "string" || !username || username.length > 128) {

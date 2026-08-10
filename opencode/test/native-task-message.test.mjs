@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { materializeCommandOutcome, materializeTaskMessages } from "../lib/native-task-message.mjs";
+import { materializeCommandOutcome, materializeGitHubIssueConversation, materializeTaskMessages } from "../lib/native-task-message.mjs";
 
 function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "harness-native-message-"));
@@ -31,6 +31,58 @@ function insertMessage(db, { id, sessionId, createdAt, data, parts }) {
       .run(`prt_fixture_${id}_${index}`, id, sessionId, createdAt + index, createdAt + index, JSON.stringify(part));
   });
 }
+
+
+test("materializes a GitHub Issue as the first user turn before coding starts", () => {
+  const { db, dbPath, directory } = fixture();
+  try {
+    const parent = "ses_parent_12345678";
+    insertSession(db, parent, "GitHub Issue #57: Fix login", "/workspace");
+    const task = {
+      schemaVersion: 1,
+      issueNumber: 57,
+      title: "Fix login",
+      status: "running",
+      stages: ["accepted"],
+      updatedAt: new Date(2_000).toISOString(),
+    };
+
+    assert.deepEqual(materializeGitHubIssueConversation({
+      dbPath,
+      parentSessionId: parent,
+      issue: {
+        title: "Fix login",
+        body: "The login form accepts an empty email.",
+        comments: "@developer: Also validate the error text.",
+      },
+      task,
+      projectDirectory: "/workspace",
+    }), { changed: true });
+
+    const messages = db.prepare("SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created").all(parent);
+    assert.equal(messages.length, 2);
+    assert.equal(JSON.parse(messages[0].data).role, "user");
+    assert.equal(JSON.parse(messages[1].data).role, "assistant");
+    const userText = JSON.parse(db.prepare("SELECT data FROM part WHERE message_id = ?").get(messages[0].id).data).text;
+    assert.match(userText, /GitHub Issue #57: Fix login/);
+    assert.match(userText, /empty email/);
+    assert.match(userText, /validate the error text/);
+    const assistantText = JSON.parse(db.prepare("SELECT data FROM part WHERE message_id = ?").get(messages[1].id).data).text;
+    assert.equal(assistantText, "Задача принята.");
+
+    materializeGitHubIssueConversation({
+      dbPath,
+      parentSessionId: parent,
+      issue: { title: "Fix login", body: "The login form accepts an empty email.", comments: "@developer: Also validate the error text." },
+      task,
+      projectDirectory: "/workspace",
+    });
+    assert.equal(db.prepare("SELECT COUNT(*) count FROM message WHERE session_id = ?").get(parent).count, 2);
+  } finally {
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("materializes the child final answer and native diffs into the parent turn exactly once", () => {
   const { db, dbPath, directory } = fixture();

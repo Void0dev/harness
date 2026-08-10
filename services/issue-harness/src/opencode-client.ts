@@ -1,3 +1,4 @@
+import type { TaskView } from "./task-view.js";
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{8,128}$/;
 
 type Fetch = typeof fetch;
@@ -53,6 +54,44 @@ export class OpenCodeClient {
 
   async createParent(options: { title: string }) {
     return this.createSession(this.options.parentDirectory, { title: options.title });
+  }
+
+
+  async createGitHubIssueConversation(options: {
+    issueNumber: number;
+    title: string;
+    body: string;
+    comments: string;
+  }) {
+    const result = await this.request(
+      "POST",
+      "/__harness/internal/github-issue-conversations",
+      this.options.parentDirectory,
+      {
+        issueNumber: options.issueNumber,
+        title: options.title,
+        body: options.body,
+        comments: options.comments,
+        modelId: this.options.modelId,
+      },
+    );
+    const parentSessionId = result && typeof result === "object"
+      ? (result as { parentSessionId?: unknown }).parentSessionId
+      : undefined;
+    if (typeof parentSessionId !== "string" || !SESSION_ID.test(parentSessionId)) {
+      throw new Error("OpenCode returned an invalid parent session");
+    }
+    return parentSessionId;
+  }
+
+  async materializeTaskView(parentSessionId: string, task: TaskView) {
+    this.assertSessionId(parentSessionId);
+    await this.request(
+      "POST",
+      "/__harness/internal/task-messages",
+      this.options.parentDirectory,
+      { parentSessionId, task },
+    );
   }
 
   async createChild(options: { parentSessionId?: string; directory: string; title: string }) {

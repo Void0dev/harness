@@ -9,10 +9,93 @@ import {
   createNativeEventHub,
   createSseForwarder,
   encodeNativeEvent,
+  sessionCreatedEvent,
+  findGitHubIssueParentSession,
+  listGitHubIssueParentSessions,
   taskCompletionEvents,
   terminalSessionIdleEvent,
   sessionSnapshotEvents,
 } from "../lib/native-events.mjs";
+
+test("reuses the oldest existing parent session for the same GitHub Issue", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "harness-native-session-reuse-"));
+  const dbPath = path.join(directory, "opencode.db");
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, title TEXT, directory TEXT, time_created INTEGER)");
+    const insert = db.prepare("INSERT INTO session VALUES (?, ?, ?, ?, ?)");
+    insert.run("ses_first_12345678", null, "GitHub Issue #57: Fix login", "/workspace", 1_000);
+    insert.run("ses_duplicate_12345678", null, "GitHub Issue #57: Fix login", "/workspace", 2_000);
+    insert.run("ses_child_12345678", "ses_first_12345678", "GitHub Issue #57 worker", "/workspace", 500);
+    insert.run("ses_other_12345678", null, "GitHub Issue #58: Fix logout", "/workspace", 100);
+
+    assert.equal(findGitHubIssueParentSession(dbPath, 57, "/workspace"), "ses_first_12345678");
+    assert.equal(findGitHubIssueParentSession(dbPath, 59, "/workspace"), undefined);
+  } finally {
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("lists every GitHub parent session without the OpenCode API page limit", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "harness-native-parent-list-"));
+  const dbPath = path.join(directory, "opencode.db");
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, title TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER)");
+    const insert = db.prepare("INSERT INTO session VALUES (?, ?, ?, ?, ?, ?)");
+    for (let index = 1; index <= 120; index += 1) {
+      insert.run(`ses_issue_${String(index).padStart(8, "0")}`, null, `GitHub Issue #34: copy ${index}`, "/workspace", index, index);
+    }
+    insert.run("ses_issue_36_12345678", null, "GitHub Issue #36: newest task", "/workspace", 121, 121);
+    insert.run("ses_regular_12345678", null, "Regular chat", "/workspace", 122, 122);
+
+    const sessions = listGitHubIssueParentSessions(dbPath, "/workspace");
+    assert.equal(sessions.length, 121);
+    assert.equal(sessions.at(-1).title, "GitHub Issue #36: newest task");
+  } finally {
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("projects a newly created session as the event used by the session switcher", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "harness-native-session-event-"));
+  const dbPath = path.join(directory, "opencode.db");
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE session (
+        id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, slug TEXT, directory TEXT,
+        path TEXT, title TEXT, version TEXT, cost REAL, tokens_input INTEGER,
+        tokens_output INTEGER, tokens_reasoning INTEGER, tokens_cache_read INTEGER,
+        tokens_cache_write INTEGER, time_created INTEGER, time_updated INTEGER
+      );
+    `);
+    db.prepare("INSERT INTO session VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+      "ses_test_12345678", "project_123", null, "tidy-eagle", "/workspace", "", "GitHub Issue #57", "1.18.7",
+      0, 0, 0, 0, 0, 0, 1_000, 2_000,
+    );
+
+    const event = sessionCreatedEvent(dbPath, "ses_test_12345678");
+    assert.match(event.id, /^evt_[A-Za-z0-9_-]+$/);
+    assert.deepEqual({ type: event.type, properties: event.properties }, {
+      type: "session.created",
+      properties: {
+        sessionID: "ses_test_12345678",
+        info: {
+          id: "ses_test_12345678", projectID: "project_123", slug: "tidy-eagle", directory: "/workspace",
+          path: "", title: "GitHub Issue #57", version: "1.18.7", cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 1_000, updated: 2_000 },
+        },
+      },
+    });
+  } finally {
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("encodes one OpenCode event as a complete SSE frame", () => {
   assert.equal(

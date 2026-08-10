@@ -110,7 +110,7 @@ export const config = {
   openCodeModelId,
   publicWebPort: boundedPort("OPENCODE_PUBLIC_PORT", 4096),
   webUsername: required("OPENCODE_SERVER_USERNAME"),
-  webPassword: strongSecret("OPENCODE_SERVER_PASSWORD"),
+  webPassword: required("OPENCODE_SERVER_PASSWORD"),
   webSessionSecret: strongSecret("OPENCODE_SESSION_SECRET"),
   webSessionTtlSeconds: boundedSessionTtl(),
   contextDir: path.join(dataDir, "context"),
