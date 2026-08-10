@@ -30,9 +30,19 @@ PHASES = (
     "branches-verified",
     "awaiting-ruleset-authority",
     "rulesets-verified",
+    "branch-policy-resolved",
     "deployed",
     "verified",
     "reported",
+)
+
+BRANCH_POLICY_MODES = (
+    "protected-rulesets",
+    "unprotected-degraded",
+)
+
+DEGRADED_BRANCH_POLICY_ERROR_CODES = (
+    "rulesets_feature_unavailable_private_plan",
 )
 
 _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -55,6 +65,7 @@ _METADATA_FIELDS = {
     "desired_state_digest",
     "github_app_id",
     "github_app_installation_id",
+    "branch_policy_mode",
     "last_error_code",
     "public_url",
     "updated_at",
@@ -319,6 +330,9 @@ def validate_state(state: object) -> None:
         raise ValueError(
             "unexpected metadata fields: " + ", ".join(sorted(unexpected_metadata))
         )
+    branch_policy_mode = metadata.get("branch_policy_mode")
+    if branch_policy_mode is not None and branch_policy_mode not in BRANCH_POLICY_MODES:
+        raise ValueError("unknown branch policy mode")
     try:
         json.dumps(state, allow_nan=False)
     except (TypeError, ValueError) as error:
@@ -337,10 +351,46 @@ def advance_phase(state: dict[str, object], target_phase: str) -> dict[str, obje
         )
     if target_index == current_index:
         return state
+    if (
+        target_index >= PHASES.index("deployed")
+        and state["metadata"].get("branch_policy_mode") not in BRANCH_POLICY_MODES
+    ):
+        raise ValueError("branch policy must be resolved before deployment")
     advanced = copy.deepcopy(state)
     advanced["phase"] = target_phase
     validate_state(advanced)
     return advanced
+
+
+def resolve_branch_policy(
+    state: dict[str, object],
+    mode: str,
+) -> dict[str, object]:
+    """Record the enforced or explicitly degraded branch-integrity posture."""
+    validate_state(state)
+    if mode not in BRANCH_POLICY_MODES:
+        raise ValueError(f"unknown branch policy mode {mode!r}")
+
+    phase = state["phase"]
+    if mode == "protected-rulesets":
+        if phase != "rulesets-verified":
+            raise ValueError("protected branch policy requires verified rulesets")
+    else:
+        error_code = state["metadata"].get("last_error_code")
+        if error_code not in DEGRADED_BRANCH_POLICY_ERROR_CODES:
+            raise ValueError(
+                "unprotected degraded mode requires a proven private-plan limitation"
+            )
+        if phase not in {"branches-verified", "awaiting-ruleset-authority"}:
+            raise ValueError(
+                "unprotected degraded mode requires verified branches and unavailable rulesets"
+            )
+
+    resolved = copy.deepcopy(state)
+    resolved["metadata"]["branch_policy_mode"] = mode
+    resolved["phase"] = "branch-policy-resolved"
+    validate_state(resolved)
+    return resolved
 
 
 def state_path(root: os.PathLike[str] | str, repository: object) -> pathlib.Path:

@@ -159,6 +159,7 @@ class SkillContractTest(unittest.TestCase):
             "branches-verified",
             "awaiting-ruleset-authority",
             "rulesets-verified",
+            "branch-policy-resolved",
             "deployed",
             "verified",
             "reported",
@@ -166,6 +167,16 @@ class SkillContractTest(unittest.TestCase):
             self.assertIn(phase, skill)
         self.assertIn("Never call DELETE", skill)
         self.assertIn("никогда не reset/clean local branch", skill)
+
+    def test_skill_supports_private_repositories_without_github_team(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("GitHub Team/Pro не является prerequisite", skill)
+        self.assertIn("protected-rulesets", skill)
+        self.assertIn("unprotected-degraded", skill)
+        self.assertIn("rulesets_feature_unavailable_private_plan", skill)
+        self.assertIn("branch-policy-resolved", skill)
+        self.assertIn("Installation продолжается", skill)
 
     def test_skill_renders_the_runtime_only_model_key_config(self):
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -224,6 +235,19 @@ class SkillContractTest(unittest.TestCase):
         self.assertIn("--deny-self-hosted-runners", release)
         self.assertNotIn("verify_agent.py", release)
         self.assertNotIn("inventory", release.lower())
+
+    def test_image_release_requires_public_canonical_packages(self):
+        workflow = (ROOT / ".github" / "workflows" / "publish-images.yml").read_text()
+        release = (SKILL / "references" / "image-release.md").read_text()
+        skill = (SKILL / "SKILL.md").read_text()
+
+        self.assertNotIn("/visibility", workflow)
+        self.assertIn("public GHCR packages", release)
+        for image in ("issue-harness", "opencode-web"):
+            url = f"https://github.com/orgs/Void0dev/packages/container/{image}/settings"
+            self.assertIn(url, release)
+            self.assertIn(url, skill)
+        self.assertIn("anonymous pull", skill)
 
 
 if __name__ == "__main__":

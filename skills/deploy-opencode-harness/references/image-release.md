@@ -1,11 +1,18 @@
 # Harness image release
 
-Deploy only canonical images addressed by digest:
+Deploy only canonical images addressed by digest from public GHCR packages:
 
 - `ghcr.io/void0dev/issue-harness@sha256:<64-hex-digest>`
 - `ghcr.io/void0dev/opencode-web@sha256:<64-hex-digest>`
 
 Resolve both digests from one successful `Publish harness images` workflow run on `refs/heads/main`. Both images must bind the same full source commit. Never deploy a floating tag, a digest from a fork, or images from different workflow runs.
+
+Both canonical packages must be public so a repository-scoped target GitHub App never needs access to `Void0dev/harness` packages and the deployment host never stores a personal package token.
+
+GitHub exposes package visibility only through package settings. If either anonymous pull fails, an owner must open both links and set **Change package visibility → Public** before deployment continues:
+
+- https://github.com/orgs/Void0dev/packages/container/issue-harness/settings
+- https://github.com/orgs/Void0dev/packages/container/opencode-web/settings
 
 Verify each subject directly with GitHub CLI before deployment:
 

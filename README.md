@@ -2,7 +2,7 @@
 
 OpenCode Harness attaches an authenticated OpenCode workspace to an existing GitHub repository and turns GitHub Issues into tested code changes and draft pull requests targeting `stage`.
 
-The runtime does not use Codex. One standard OpenCode `build` agent acts as the chat agent, coding agent, and GitHub operator. It can inspect and edit the project, run commands and tests, commit and push changes, create pull requests, and perform explicitly requested merge operations. The actual security boundary is enforced by the repository-scoped Release App permissions and GitHub rulesets.
+The runtime does not use Codex. One standard OpenCode `build` agent acts as the chat agent, coding agent, and GitHub operator. It can inspect and edit the project, run commands and tests, commit and push changes, create pull requests, and perform explicitly requested merge operations. Repository-scoped Release App permissions always bound GitHub access; GitHub rulesets add server-side branch enforcement when the repository plan supports them.
 
 ## Architecture
 
@@ -60,7 +60,11 @@ sequenceDiagram
     Owner->>GitHub: Create and install the App on one repository
     Skill->>GitHub: Verify App identity, installation, scope, and permissions
     Skill->>GitHub: Create stage at main SHA when stage is absent
-    Skill->>GitHub: Apply and read back stage and production rulesets
+    alt Rulesets available
+        Skill->>GitHub: Apply and read back stage and production rulesets
+    else Private-plan limitation
+        Skill->>Skill: Record unprotected-degraded branch policy
+    end
     Skill->>Server: Deploy the canonical two-service topology
     Skill->>Harness: Verify login, health, and repository identity
     Skill->>Runtime: Verify private access, model binding, and workspace
@@ -80,7 +84,12 @@ The required Release App configuration is:
 
 `main` must already exist. The installer creates a missing `stage` exactly once at the current `main` SHA. It never resets, replaces, deletes, or force-pushes an existing branch.
 
-The installer manages only the namespaced `harness-stage` and `harness-production` rulesets. A temporary owner or bootstrap authority is required to configure rulesets because the Release App deliberately has no Administration permission.
+GitHub Team/Pro is not required to install Harness. The installer resolves one explicit branch-policy mode before deployment:
+
+- `protected-rulesets`: the installer manages only the namespaced `harness-stage` and `harness-production` rulesets. A temporary owner or bootstrap authority configures them because the Release App deliberately has no Administration permission.
+- `unprotected-degraded`: when GitHub explicitly reports that Rulesets are unavailable for the private repository's plan, installation continues without them. `main` and `stage` are not server-side protected in this mode; the Release App has `Contents: write`, so PR topology is enforced by the operational contract and trust in the App, not by GitHub.
+
+Missing bootstrap credentials or an ambiguous API error does not silently select degraded mode. The fallback is only used for a verified plan limitation and is persisted in installer state.
 
 Only the two-service Harness stack is deployed. The installer does not inspect, modify, or deploy the target application or its databases, containers, secrets, domains, or logs.
 
@@ -107,7 +116,7 @@ sequenceDiagram
 
 The browser never receives `HARNESS_COMMAND_TOKEN`, `OPENCODE_INTERNAL_TOKEN`, a GitHub installation token, or the model key. Harness removes browser authorization before proxying and supplies the internal runtime bearer itself.
 
-Normal chat uses the persistent writable project checkout. The standard agent can inspect, edit, test, commit, push, create pull requests, and perform other GitHub operations allowed by the Release App and repository rulesets.
+Normal chat uses the persistent writable project checkout. The standard agent can inspect, edit, test, commit, push, create pull requests, and perform other GitHub operations allowed by the Release App and any repository rulesets available on the selected plan.
 
 ## Issue Workflow
 
@@ -274,8 +283,8 @@ Harness state is written atomically with private file permissions and rejects cr
 - The OpenCode agent is intentionally allowed to use normal edit, shell, Git, and GitHub tools.
 - Agent configuration is not the security boundary for repository operations.
 - Release App permissions define which GitHub APIs and repository operations are available.
-- `harness-stage` and `harness-production` rulesets control protected branch updates and merges.
-- Release App ruleset bypass is limited to pull-request operations and is never unrestricted.
+- In `protected-rulesets`, `harness-stage` and `harness-production` control protected branch updates and merges, and Release App bypass is limited to pull-request operations.
+- In `unprotected-degraded`, `main` and `stage` have no Harness-managed server-side protection; Release App scope and the operational contract are the remaining repository boundaries.
 - The web password and session-signing secret exist only in `harness`.
 - The model key and OpenCode SQLite database exist only in `opencode-runtime`.
 - The browser receives none of the internal service or GitHub credentials.

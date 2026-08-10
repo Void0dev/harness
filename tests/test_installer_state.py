@@ -171,6 +171,63 @@ class InstallerStateTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "phase regression"):
             self.installer.advance_phase(advanced, "preflight")
 
+    def test_resolves_verified_rulesets_as_protected_branch_policy(self):
+        state = self.installer.advance_phase(self.state(), "rulesets-verified")
+
+        resolved = self.installer.resolve_branch_policy(
+            state,
+            "protected-rulesets",
+        )
+
+        self.assertEqual(resolved["phase"], "branch-policy-resolved")
+        self.assertEqual(
+            resolved["metadata"]["branch_policy_mode"],
+            "protected-rulesets",
+        )
+
+    def test_allows_private_plan_fallback_without_github_team(self):
+        state = self.installer.advance_phase(
+            self.state(),
+            "awaiting-ruleset-authority",
+        )
+        state["metadata"]["last_error_code"] = (
+            "rulesets_feature_unavailable_private_plan"
+        )
+
+        resolved = self.installer.resolve_branch_policy(
+            state,
+            "unprotected-degraded",
+        )
+
+        self.assertEqual(resolved["phase"], "branch-policy-resolved")
+        self.assertEqual(
+            resolved["metadata"]["branch_policy_mode"],
+            "unprotected-degraded",
+        )
+        self.assertEqual(
+            resolved["metadata"]["last_error_code"],
+            "rulesets_feature_unavailable_private_plan",
+        )
+
+    def test_rejects_degraded_policy_for_an_ambiguous_ruleset_failure(self):
+        state = self.installer.advance_phase(
+            self.state(),
+            "awaiting-ruleset-authority",
+        )
+        state["metadata"]["last_error_code"] = "rulesets_api_forbidden"
+
+        with self.assertRaisesRegex(ValueError, "private-plan limitation"):
+            self.installer.resolve_branch_policy(
+                state,
+                "unprotected-degraded",
+            )
+
+    def test_cannot_deploy_without_a_resolved_branch_policy(self):
+        state = self.installer.advance_phase(self.state(), "rulesets-verified")
+
+        with self.assertRaisesRegex(ValueError, "branch policy must be resolved"):
+            self.installer.advance_phase(state, "deployed")
+
     def test_state_path_is_keyed_by_full_repository_hash(self):
         root = pathlib.Path("/tmp/installer-state")
         expected = self.installer.repository_hash("acme/payments") + ".json"
